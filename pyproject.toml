@@ -1,0 +1,25 @@
+[project]
+name = "repo-publish-check"
+version = "0.1.0"
+description = "Agent skill that checks a Git repository before it is made public."
+requires-python = ">=3.11"
+license = "MIT"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "SIM", "RUF"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["scan"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+files = ["skills", "tests"]
+mypy_path = "skills/repo-publish-check/scripts"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

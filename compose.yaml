@@ -1,0 +1,9 @@
+services:
+  dev:
+    build: .
+    # Run as the host user so that files created in the container stay editable.
+    user: "${HOST_UID:-1000}:${HOST_GID:-1000}"
+    environment:
+      HOME: /tmp
+    volumes:
+      - .:/work
