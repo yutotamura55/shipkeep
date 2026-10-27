@@ -410,14 +410,20 @@ Span = tuple[int, int, str]
 
 
 def local_path_spans(text: str) -> list[Span]:
+    """Return the span of each local path, masking the rest of the line when its end is unclear.
+
+    After a bracket or quote, a path runs to the closer, so that a path with
+    spaces stays hidden; otherwise it runs to whitespace. When another closer
+    follows, or a quote falls inside the span, the end is ambiguous: a nested
+    bracket or an escaped quote could end it early, and a swallowed quote would
+    expose the quoted text after it. Then the rest of the line is masked, which
+    hides more, never less.
+    """
     spans = []
     for match in LOCAL_PATH_START.finditer(text):
         start = match.start()
         opener = text[start - 1] if start > 0 else ""
         if opener in CLOSERS:
-            # With one closer on the rest of the line, the path ends there. With
-            # more, nested brackets or escaped quotes make the end ambiguous, so
-            # the rest of the line is masked: this hides more, never less.
             closer = CLOSERS[opener]
             end = text.find(closer, match.end())
             if text.count(closer, match.end()) > 1:
@@ -425,7 +431,10 @@ def local_path_spans(text: str) -> list[Span]:
         else:
             gap = re.search(r"\s", text[match.end() :])
             end = match.end() + gap.start() if gap else -1
-        spans.append((start, len(text) if end == -1 else end, "local_path"))
+        end = len(text) if end == -1 else end
+        if any(quote in text[start:end] for quote in "'\"`"):
+            end = len(text)
+        spans.append((start, end, "local_path"))
     return spans
 
 

@@ -368,7 +368,8 @@ def test_context_masks_a_bracketed_path_to_its_matching_closer(tmp_path: Path) -
 
     contexts = contexts_of(scan.scan(tmp_path), "history_personal_data")
 
-    assert contexts == ["see [plan](<local_path>) today"]
+    # The quote inside the path makes its end ambiguous, so the rest is masked.
+    assert contexts == ["see [plan](<local_path>"]
 
 
 # Fifth round: nested brackets and escaped quotes inside a path. When the end of
@@ -381,6 +382,8 @@ def test_context_masks_a_bracketed_path_to_its_matching_closer(tmp_path: Path) -
         (f"see ({HOME}/a (1)/b.md) now", "see (<local_path>"),
         (f'path = "{HOME}/it\\"s/b.md" now', 'path = "<local_path>'),
         (f'({HOME}/a) "short ) confidential"', "(<local_path>"),
+        (f'({HOME}/a "short ) confidential"', "(<local_path>"),
+        (f'{HOME}/x"secret value"', "<local_path>"),
     ],
 )
 def test_context_masks_the_rest_of_the_line_after_an_ambiguous_path(
