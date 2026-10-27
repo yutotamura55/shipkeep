@@ -371,17 +371,19 @@ def test_context_masks_a_bracketed_path_to_its_matching_closer(tmp_path: Path) -
     assert contexts == ["see [plan](<local_path>) today"]
 
 
-# Fifth round: nested brackets and escaped quotes inside a path.
+# Fifth round: nested brackets and escaped quotes inside a path. When the end of
+# a path is ambiguous, the rest of the line is masked.
 
 
 @pytest.mark.parametrize(
     ("line", "expected"),
     [
-        (f"see ({HOME}/a (1)/b.md) now", "see (<local_path>) now"),
-        (f'path = "{HOME}/it\\"s/b.md" now', 'path = "<local_path>" now'),
+        (f"see ({HOME}/a (1)/b.md) now", "see (<local_path>"),
+        (f'path = "{HOME}/it\\"s/b.md" now', 'path = "<local_path>'),
+        (f'({HOME}/a) "short ) confidential"', "(<local_path>"),
     ],
 )
-def test_context_masks_a_path_to_the_last_closer_on_the_line(
+def test_context_masks_the_rest_of_the_line_after_an_ambiguous_path(
     tmp_path: Path, line: str, expected: str
 ) -> None:
     repo = GitRepo(tmp_path)

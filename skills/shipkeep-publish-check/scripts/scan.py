@@ -66,9 +66,8 @@ SECRET_PATTERNS = {
 # Long runs of key-like characters are masked in context lines even when no
 # pattern names them, because they may be secrets of an unknown format.
 KEY_LIKE = re.compile(r"[A-Za-z0-9+/_-]{20,}")
-# The start of a local path. The mask runs to the last closer on the line of the
-# bracket or quote before it, so that a path with spaces stays hidden, or else
-# to whitespace.
+# The start of a local path. After a bracket or quote, the mask runs to its
+# closer, so that a path with spaces stays hidden; otherwise to whitespace.
 LOCAL_PATH_START = re.compile(r"(?:/home/|/Users/|[A-Za-z]:\\+Users\\+)[A-Za-z0-9_.-]+")
 CLOSERS = {"(": ")", "[": "]", "<": ">", "'": "'", '"': '"', "`": "`"}
 # Values after "=" or ":" may be passwords of any length.
@@ -416,10 +415,13 @@ def local_path_spans(text: str) -> list[Span]:
         start = match.start()
         opener = text[start - 1] if start > 0 else ""
         if opener in CLOSERS:
-            # The last closer on the line, so that nested brackets and escaped
-            # quotes inside the path cannot end the mask early. This can hide
-            # more than the path, never less.
-            end = text.rfind(CLOSERS[opener], match.end())
+            # With one closer on the rest of the line, the path ends there. With
+            # more, nested brackets or escaped quotes make the end ambiguous, so
+            # the rest of the line is masked: this hides more, never less.
+            closer = CLOSERS[opener]
+            end = text.find(closer, match.end())
+            if text.count(closer, match.end()) > 1:
+                end = -1
         else:
             gap = re.search(r"\s", text[match.end() :])
             end = match.end() + gap.start() if gap else -1
