@@ -1,0 +1,25 @@
+[project]
+name = "shipkeep"
+version = "0.1.0"
+description = "Agent skills that keep vibe-coded software fit to ship."
+requires-python = ">=3.11"
+license = "MIT"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "SIM", "RUF"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["scan"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+files = ["skills", "tests"]
+mypy_path = "skills/shipkeep-publish-check/scripts"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
