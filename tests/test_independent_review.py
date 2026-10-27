@@ -369,3 +369,22 @@ def test_context_masks_a_bracketed_path_to_its_matching_closer(tmp_path: Path) -
     contexts = contexts_of(scan.scan(tmp_path), "history_personal_data")
 
     assert contexts == ["see [plan](<local_path>) today"]
+
+
+# Fifth round: nested brackets and escaped quotes inside a path.
+
+
+@pytest.mark.parametrize(
+    ("line", "expected"),
+    [
+        (f"see ({HOME}/a (1)/b.md) now", "see (<local_path>) now"),
+        (f'path = "{HOME}/it\\"s/b.md" now', 'path = "<local_path>" now'),
+    ],
+)
+def test_context_masks_a_path_to_the_last_closer_on_the_line(
+    tmp_path: Path, line: str, expected: str
+) -> None:
+    repo = GitRepo(tmp_path)
+    repo.commit({"notes.md": line + "\n"})
+
+    assert contexts_of(scan.scan(tmp_path), "history_personal_data") == [expected]
