@@ -18,7 +18,10 @@ SCHEMA_VERSION = 1
 
 
 def is_git_repository(path: Path) -> bool:
-    """Return whether ``path`` is inside a work tree or is a bare repository."""
+    """Return whether ``path`` is inside a work tree or is a bare repository.
+
+    Raises ``OSError`` when Git cannot be started.
+    """
     result = subprocess.run(
         ["git", "-C", str(path), "rev-parse", "--git-dir"],
         capture_output=True,
@@ -37,7 +40,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("root", type=Path, help="path to the repository to scan")
     args = parser.parse_args(argv)
     root: Path = args.root
-    if not root.is_dir() or not is_git_repository(root):
+    try:
+        is_repository = root.is_dir() and is_git_repository(root)
+    except OSError:
+        # The exception message can contain local paths, so it is not printed.
+        print("cannot run git: install Git and make sure it is on PATH", file=sys.stderr)
+        return 2
+    if not is_repository:
         print("not a Git repository: the given path", file=sys.stderr)
         return 2
     json.dump(scan(root), sys.stdout, indent=2)

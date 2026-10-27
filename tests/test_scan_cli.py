@@ -67,3 +67,17 @@ def test_scan_rejects_a_path_that_is_not_a_repository(
     captured = capsys.readouterr()
     assert "not a Git repository" in captured.err
     assert str(tmp_path) not in captured.err
+
+
+def test_scan_reports_missing_git_without_a_traceback_or_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    git_init(tmp_path)
+    monkeypatch.setenv("PATH", "")
+
+    assert scan.main([str(tmp_path)]) == 2
+
+    captured = capsys.readouterr()
+    assert "cannot run git" in captured.err
+    assert "Traceback" not in captured.err
+    assert str(tmp_path) not in captured.err

@@ -1,19 +1,27 @@
-# repo-publish-check
+# shipkeep
 
-非公開の Git リポジトリを公開に切り替える前に、公開してはいけないものが履歴に残っていないか、公開に必要なものがそろっているかを確かめる、AI エージェント用の skill です。
+バイブコーディングで作ったソフトウェアを、公開やローンチに耐える状態にし、その後も保ち続けるための、AI エージェント用の skill 群です。
+名前は、出す（ship）と保ち続ける（keep）から取りました。
 
-**状態：開発中です。** まだ検査の項目を実装していないため、使える状態ではありません。
-予定している検査は [#2](https://github.com/yutotamura55/repo-publish-check/issues/2) にあります。
+**状態：開発中です。** まだ使える skill はありません。
 
-- 対象のリポジトリを読むだけで、変更しません。GitHub にも書き込みません。
-- 履歴の秘密情報・個人情報、LICENSE、README、`.gitignore` などを確かめ、項目ごとに「満たす」「不足」「確認できない」と根拠を報告します。
-- [Agent Skills](https://agentskills.io/) の形式（`SKILL.md`）で、Claude Code・Codex などから同じ手順で使えるようにします。
+## 構成する skill
 
-## 構成
+| skill | いつ使うか | 内容 | 状態 |
+| --- | --- | --- | --- |
+| `shipkeep-publish-check` | 非公開のリポジトリを公開する前 | 履歴の秘密情報・個人情報、LICENSE、README、`.gitignore` などを確かめる | 実装中（[#2](https://github.com/yutotamura55/shipkeep/issues/2)） |
+| 定期的な点検 | 公開した後、毎週や脆弱性のアラートのとき | 新しい脆弱性の報告が自分のコードに関わるかを判断し、証拠付きの Issue にする | 予定 |
+| ローンチ前の点検 | 利用者に提供する前 | 既存の点検ツールの結果を、共通の形式と Issue につなぐ | 予定 |
+| リファクタリング | 点検の後、運用中 | 複雑度・重複・責務の偏りを測り、直す計画を立てる | 予定 |
+
+どの skill も、対象のリポジトリを読むだけで変更しません。結果は項目ごとに「満たす」「不足」「確認できない」と根拠で報告します。
+[Agent Skills](https://agentskills.io/) の形式（`SKILL.md`）で、Claude Code・Codex などから同じ手順で使えるようにします。
+
+## リポジトリの構成
 
 | 場所 | 内容 |
 | --- | --- |
-| `skills/repo-publish-check/` | skill 本体。今は検査を行うスクリプト（`scripts/scan.py`）の入口だけがある。`SKILL.md` は #2 で追加する |
+| `skills/<skill 名>/` | 各 skill。`SKILL.md` と、決まった検査を行うスクリプト（`scripts/`）を置く。今は `shipkeep-publish-check` の検査スクリプトの入口（`scripts/scan.py`）だけがあり、`SKILL.md` は #2 で追加する |
 | `tests/` | スクリプトのテスト |
 | `scripts/check.sh` | 書式・lint・型検査・テストをまとめて実行する |
 

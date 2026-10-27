@@ -1,7 +1,7 @@
 [project]
-name = "repo-publish-check"
+name = "shipkeep"
 version = "0.1.0"
-description = "Agent skill that checks a Git repository before it is made public."
+description = "Agent skills that keep vibe-coded software fit to ship."
 requires-python = ">=3.11"
 license = "MIT"
 
@@ -19,7 +19,7 @@ known-first-party = ["scan"]
 python_version = "3.11"
 strict = true
 files = ["skills", "tests"]
-mypy_path = "skills/repo-publish-check/scripts"
+mypy_path = "skills/shipkeep-publish-check/scripts"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
