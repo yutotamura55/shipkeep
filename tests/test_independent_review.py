@@ -340,3 +340,32 @@ def test_env_use_in_a_subproject_without_a_known_manifest(
     repo.commit(files)
 
     assert check(scan.scan(tmp_path), "env_files")["status"] == "pass"
+
+
+# Fourth round of the independent review.
+
+
+@pytest.mark.parametrize(
+    ("line", "expected"),
+    [
+        (f"AWS={AWS_KEY_ID} pw=<word>", "AWS=<aws_access_key_id> pw=<redacted>"),
+        (f"AWS={AWS_KEY_ID} pw=<redacted>tail", "AWS=<aws_access_key_id> pw=<redacted>"),
+        (f'"{AWS_KEY_ID}" "short value"', '"<aws_access_key_id>" "<redacted>"'),
+    ],
+)
+def test_context_masking_is_not_fooled_by_placeholder_like_text(
+    tmp_path: Path, line: str, expected: str
+) -> None:
+    repo = GitRepo(tmp_path)
+    repo.commit({"a.env": line + "\n"})
+
+    assert contexts_of(scan.scan(tmp_path), "history_secrets") == [expected]
+
+
+def test_context_masks_a_bracketed_path_to_its_matching_closer(tmp_path: Path) -> None:
+    repo = GitRepo(tmp_path)
+    repo.commit({"notes.md": f"see [plan]({HOME}/it's [draft]/plan.md) today\n"})
+
+    contexts = contexts_of(scan.scan(tmp_path), "history_personal_data")
+
+    assert contexts == ["see [plan](<local_path>) today"]

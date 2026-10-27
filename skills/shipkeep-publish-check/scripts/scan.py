@@ -66,18 +66,12 @@ SECRET_PATTERNS = {
 # Long runs of key-like characters are masked in context lines even when no
 # pattern names them, because they may be secrets of an unknown format.
 KEY_LIKE = re.compile(r"[A-Za-z0-9+/_-]{20,}")
-# A whole local path, so that directory names after the user name stay hidden.
-# Inside brackets or quotes a path may hold spaces, so it runs to the closer.
-LOCAL_PATH = re.compile(
-    r"(?<=[(\[<'\"`])(?:/home/|/Users/|[A-Za-z]:\\+Users\\+)[A-Za-z0-9_.-]+[^)\]>'\"`]*"
-    r"|(?:/home/|/Users/)[A-Za-z0-9_.-]+(?:/\S*)?"
-    r"|[A-Za-z]:\\+Users\\+[A-Za-z0-9_.-]+(?:\\\S*)?"
-)
-# Placeholders this script writes into context lines; they are left as they are.
-PLACEHOLDER = r"<(?:[a-z_]+|term \d+)>"
-# Values after "=" or ":" and inside quotes may be passwords of any length.
-ASSIGNED_VALUE = re.compile(r"([=:]\s*)(?!" + PLACEHOLDER + r")([^\s'\"]+)")
-QUOTED = re.compile(r"(['\"])(?!" + PLACEHOLDER + r"\1)(?:(?!\1).)*\1")
+# The start of a local path. The mask runs to the closer of the bracket or quote
+# before it, so that a path with spaces stays hidden, or else to whitespace.
+LOCAL_PATH_START = re.compile(r"(?:/home/|/Users/|[A-Za-z]:\\+Users\\+)[A-Za-z0-9_.-]+")
+CLOSERS = {"(": ")", "[": "]", "<": ">", "'": "'", '"': '"', "`": "`"}
+# Values after "=" or ":" may be passwords of any length.
+ASSIGNED_VALUE = re.compile(r"[=:]\s*([^\s'\"]+)")
 CONTEXT_LENGTH = 200
 
 EMAIL = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}")
@@ -412,21 +406,101 @@ def matching_terms(text: str, denylist: list[str]) -> list[int]:
     return [number for number, term in enumerate(denylist, 1) if term.lower() in lowered]
 
 
+Span = tuple[int, int, str]
+
+
+def local_path_spans(text: str) -> list[Span]:
+    spans = []
+    for match in LOCAL_PATH_START.finditer(text):
+        start = match.start()
+        opener = text[start - 1] if start > 0 else ""
+        if opener in CLOSERS:
+            end = text.find(CLOSERS[opener], match.end())
+        else:
+            gap = re.search(r"\s", text[match.end() :])
+            end = match.end() + gap.start() if gap else -1
+        spans.append((start, len(text) if end == -1 else end, "local_path"))
+    return spans
+
+
+def quoted_spans(text: str) -> list[tuple[int, int]]:
+    """Return the inside of each quoted string, pairing every quote with the next of its kind."""
+    spans = []
+    position = 0
+    while position < len(text):
+        quote = text[position]
+        if quote in "'\"":
+            end = text.find(quote, position + 1)
+            end = len(text) if end == -1 else end
+            spans.append((position + 1, end))
+            position = end + 1
+        else:
+            position += 1
+    return spans
+
+
 def masked(text: str, denylist: list[str]) -> str:
-    """Return ``text`` with every confidential value replaced by a placeholder."""
+    """Return ``text`` with every confidential value replaced by a placeholder.
+
+    Every rule marks spans of the original text, and placeholders are written
+    once at the end, so that text resembling a placeholder cannot fool a rule.
+    """
+    detected: list[Span] = []
     for kind, pattern in SECRET_PATTERNS.items():
-        text = pattern.sub(f"<{kind}>", text)
-    text = EMAIL.sub(
-        lambda m: m.group(0) if is_public_address(m.group(0)) else "<email_address>", text
-    )
-    text = LOCAL_PATH.sub("<local_path>", text)
+        detected += [(m.start(), m.end(), kind) for m in pattern.finditer(text)]
+    detected += [
+        (m.start(), m.end(), "email_address")
+        for m in EMAIL.finditer(text)
+        if not is_public_address(m.group(0))
+    ]
+    detected += local_path_spans(text)
     for number, term in enumerate(denylist, 1):
-        text = re.sub(re.escape(term), f"<term {number}>", text, flags=re.IGNORECASE)
-    text = ASSIGNED_VALUE.sub(lambda m: f"{m.group(1)}<redacted>", text)
-    text = QUOTED.sub(lambda m: f"{m.group(1)}<redacted>{m.group(1)}", text)
-    text = KEY_LIKE.sub("<redacted>", text)
-    text = text.strip()
-    return text if len(text) <= CONTEXT_LENGTH else text[:CONTEXT_LENGTH] + "..."
+        detected += [
+            (m.start(), m.end(), f"term {number}")
+            for m in re.finditer(re.escape(term), text, flags=re.IGNORECASE)
+        ]
+    # The general rules run on the text with the detected values blanked out, so
+    # that a quote or a slash inside a detected value cannot start a new span.
+    blanked = list(text)
+    for start, end, _ in detected:
+        blanked[start:end] = "\x01" * (end - start)
+    rest = "".join(blanked)
+    generic = [
+        *quoted_spans(rest),
+        *((m.start(1), m.end(1)) for m in ASSIGNED_VALUE.finditer(rest)),
+        *((m.start(), m.end()) for m in KEY_LIKE.finditer(rest)),
+    ]
+    # A general span that lies inside a detected value adds nothing.
+    spans = detected + [
+        (start, end, "redacted")
+        for start, end in generic
+        if end > start
+        and not any(d_start <= start and end <= d_end for d_start, d_end, _ in detected)
+    ]
+
+    # Overlapping spans become one placeholder: their kind when they all share
+    # it, "redacted" when they differ.
+    groups: list[list[Span]] = []
+    for span in sorted(spans):
+        if groups and span[0] < max(end for _, end, _ in groups[-1]):
+            groups[-1].append(span)
+        else:
+            groups.append([span])
+    merged: list[Span] = []
+    for group in groups:
+        labels = {label for _, _, label in group}
+        label = labels.pop() if len(labels) == 1 else "redacted"
+        merged.append((group[0][0], max(end for _, end, _ in group), label))
+    parts = []
+    position = 0
+    for start, end, label in merged:
+        parts += [text[position:start], f"<{label}>"]
+        position = end
+    parts.append(text[position:])
+    result_text = "".join(parts).strip()
+    if len(result_text) > CONTEXT_LENGTH:
+        return result_text[:CONTEXT_LENGTH] + "..."
+    return result_text
 
 
 def sensitive_file_kind(path: str) -> str | None:
