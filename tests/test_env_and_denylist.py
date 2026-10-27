@@ -151,7 +151,7 @@ def test_env_files_ignore_words_that_only_mention_dotenv(tmp_path: Path) -> None
     repo.commit(
         {
             "checker.py": 'USAGE = r"dotenv|env_file|process\\.env"\nCHECK_ID = "env_files"\n',
-            "README.md": "This tool does not use dotenv.\n",
+            "README.md": "This tool does not use dotenv or dotenv/config.\n",
         }
     )
 
@@ -175,5 +175,12 @@ def test_env_files_ignore_code_that_only_names_dev_vars(tmp_path: Path) -> None:
 def test_env_files_apply_to_a_wrangler_project(tmp_path: Path) -> None:
     repo = GitRepo(tmp_path)
     repo.commit({"wrangler.jsonc": '{ "name": "demo" }\n', ".gitignore": ".dev.vars\n"})
+
+    assert check(scan.scan(tmp_path), "env_files")["status"] == "fail"
+
+
+def test_env_files_apply_to_code_that_imports_dotenv_config(tmp_path: Path) -> None:
+    repo = GitRepo(tmp_path)
+    repo.commit({"src/index.js": "import 'dotenv/config'\n"})
 
     assert check(scan.scan(tmp_path), "env_files")["status"] == "fail"

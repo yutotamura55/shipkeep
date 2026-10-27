@@ -84,7 +84,7 @@ GITHUB_REMOTE = re.compile(
 # count. Plain os.environ is left out: it also passes the environment to
 # child processes.
 ENV_FILE_USAGE = (
-    r"load_dotenv\(|dotenv_values\(|require\(['\"]dotenv['\"]\)|dotenv/config"
+    r"load_dotenv\(|dotenv_values\(|require\(['\"]dotenv['\"]\)|['\"]dotenv/config['\"]"
     r"|from ['\"]dotenv['\"]|^\s*env_file\s*[:=]|process\.env\.|import\.meta\.env\."
 )
 # Cloudflare Workers projects keep local secrets in .dev.vars.
