@@ -509,7 +509,11 @@ def scan(root: Path, denylist: list[str] | None = None) -> dict[str, Any]:
             check_readme(root),
         ]
     checks.append(check_github_settings(root))
-    return {"schema": SCHEMA_VERSION, "checks": checks}
+    counts = {
+        status: sum(1 for check in checks if check["status"] == status)
+        for status in ("pass", "fail", "unknown", "not_applicable")
+    }
+    return {"schema": SCHEMA_VERSION, "counts": counts, "checks": checks}
 
 
 def is_git_repository(path: Path) -> bool:

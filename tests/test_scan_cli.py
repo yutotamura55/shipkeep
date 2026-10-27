@@ -5,6 +5,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
+from gitrepo import GitRepo
 
 import scan
 
@@ -83,3 +84,13 @@ def test_scan_reports_missing_git_without_a_traceback_or_path(
     assert "cannot run git" in captured.err
     assert "Traceback" not in captured.err
     assert str(tmp_path) not in captured.err
+
+
+def test_scan_counts_the_checks_by_status(tmp_path: Path) -> None:
+    # Agents miscount table rows, so the report's first line uses these counts.
+    repo = GitRepo(tmp_path)
+    repo.commit({"README.md": "# demo\n"})
+
+    result = scan.scan(tmp_path)
+
+    assert result["counts"] == {"pass": 5, "fail": 1, "unknown": 0, "not_applicable": 3}

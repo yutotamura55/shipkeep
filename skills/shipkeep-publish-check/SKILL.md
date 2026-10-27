@@ -41,7 +41,9 @@ every value you find as confidential, including in this conversation:
    python3 <this skill's directory>/scripts/scan.py <repository> [--denylist <file>]
    ```
 
-   The script prints one JSON document. Exit code 2 means the path is not a Git
+   The script prints one JSON document. It holds kinds and locations only, never
+   a secret, an address, a path, or a denylist term, so the user can safely
+   share it. Exit code 2 means the path is not a Git
    repository, Git is missing, or the denylist cannot be read; report the
    message and stop.
 4. **Confirm the findings.** For each `fail` finding with a file and line, open
@@ -53,7 +55,8 @@ every value you find as confidential, including in this conversation:
 ## Report format
 
 Start with one line: how many checks need fixing, or that the repository is
-ready to publish. Then a table with one row per check, in the order of the scan
+ready to publish. Take the numbers from `counts` in the scan output instead of
+counting rows yourself. Then a table with one row per check, in the order of the scan
 output.
 
 | Status in the JSON | Write it as |
