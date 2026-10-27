@@ -12,6 +12,7 @@ contains local paths: findings give the kind and the location only.
 from __future__ import annotations
 
 import argparse
+import fnmatch
 import json
 import re
 import subprocess
@@ -55,6 +56,15 @@ ENV_EXAMPLE_SUFFIXES = (".example", ".sample", ".template", ".dist")
 PRIVATE_KEY_FILE_NAMES = {"id_rsa", "id_dsa", "id_ecdsa", "id_ed25519"}
 PRIVATE_KEY_FILE_SUFFIXES = (".pem", ".key", ".p12", ".pfx", ".jks", ".keystore")
 CREDENTIAL_FILE_NAMES = {"credentials.json", ".netrc", ".pypirc"}
+
+ENV_USAGE = r"process\.env|import\.meta\.env|os\.environ|os\.getenv|\bgetenv\("
+ENV_EXAMPLE_NAMES = {
+    ".env.example",
+    ".env.sample",
+    ".env.template",
+    ".env.dist",
+    ".dev.vars.example",
+}
 
 
 def git(root: Path, *args: str) -> str:
@@ -196,10 +206,17 @@ def check_commit_identity(root: Path) -> Check:
     return result("commit_identity", "pass", "every commit uses a GitHub noreply address")
 
 
-def check_history_content(root: Path) -> list[Check]:
-    """Search every added line for secrets and personal data, and commit messages for addresses."""
+def matching_terms(text: str, denylist: list[str]) -> list[int]:
+    """Return the 1-based numbers of the denylist terms that appear in ``text``."""
+    lowered = text.lower()
+    return [number for number, term in enumerate(denylist, 1) if term.lower() in lowered]
+
+
+def check_history_content(root: Path, denylist: list[str] | None) -> list[Check]:
+    """Search added lines and commit messages for secrets, personal data, and denylist terms."""
     secrets: list[Finding] = []
     personal: list[Finding] = []
+    terms: list[Finding] = []
     for added in added_lines(root):
         location = {"commit": added.commit, "path": added.path, "line": added.line}
         for kind, pattern in SECRET_PATTERNS.items():
@@ -207,9 +224,13 @@ def check_history_content(root: Path) -> list[Check]:
                 secrets.append({"kind": kind, **location})
         for kind in personal_data_kinds(added.text):
             personal.append({"kind": kind, **location})
+        for number in matching_terms(added.text, denylist or []):
+            terms.append({"kind": "term_in_content", "term": number, **location})
     for commit, message in commit_messages(root):
         if any(not is_public_address(address) for address in EMAIL.findall(message)):
             personal.append({"kind": "email_in_commit_message", "commit": commit})
+        for number in matching_terms(message, denylist or []):
+            terms.append({"kind": "term_in_commit_message", "term": number, "commit": commit})
 
     if secrets:
         secrets_check = result(
@@ -230,7 +251,65 @@ def check_history_content(root: Path) -> list[Check]:
         personal_check = result(
             "history_personal_data", "pass", "no personal address or local home path was found"
         )
-    return [secrets_check, personal_check]
+    if denylist is None:
+        terms_check = result("denylist", "not_applicable", "no denylist was given")
+    elif terms:
+        terms_check = result(
+            "denylist",
+            "fail",
+            f"{len(terms)} place(s) in the history contain a denylist term",
+            terms,
+        )
+    else:
+        terms_check = result("denylist", "pass", "no denylist term appears in the history")
+    return [secrets_check, personal_check, terms_check]
+
+
+def head_paths(root: Path) -> list[str]:
+    return git(root, "ls-tree", "-r", "--name-only", "HEAD").splitlines()
+
+
+def uses_environment_variables(root: Path) -> bool:
+    completed = subprocess.run(
+        ["git", "-C", str(root), "grep", "-I", "-q", "-E", ENV_USAGE, "HEAD", "--"],
+        capture_output=True,
+        check=False,
+    )
+    return completed.returncode == 0
+
+
+def gitignore_ignores_env(root: Path, paths: list[str]) -> bool:
+    """Return whether the top-level .gitignore at HEAD ignores a file named .env."""
+    if ".gitignore" not in paths:
+        return False
+    ignored = False
+    for raw in git(root, "show", "HEAD:.gitignore").splitlines():
+        pattern = raw.strip()
+        if not pattern or pattern.startswith("#"):
+            continue
+        negated = pattern.startswith("!")
+        pattern = pattern.removeprefix("!").lstrip("/").rstrip("/")
+        if fnmatch.fnmatchcase(".env", pattern):
+            ignored = not negated
+    return ignored
+
+
+def check_env_files(root: Path) -> Check:
+    """Check that a repository that reads environment variables ignores .env and has an example."""
+    paths = head_paths(root)
+    has_example = any(PurePosixPath(path).name in ENV_EXAMPLE_NAMES for path in paths)
+    if not has_example and not uses_environment_variables(root):
+        return result("env_files", "not_applicable", "the code does not read environment variables")
+    findings: list[Finding] = []
+    if not gitignore_ignores_env(root, paths):
+        findings.append({"kind": "env_not_ignored", "path": ".gitignore"})
+    if not has_example:
+        findings.append({"kind": "env_example_missing"})
+    if findings:
+        return result(
+            "env_files", "fail", "environment files are not set up for publishing", findings
+        )
+    return result("env_files", "pass", ".env is ignored and an example file is committed")
 
 
 def check_sensitive_files(root: Path) -> Check:
@@ -281,14 +360,20 @@ CHECK_IDS = (
     "commit_identity",
     "history_secrets",
     "history_personal_data",
+    "denylist",
     "sensitive_files",
+    "env_files",
     "license",
     "readme",
 )
 
 
-def scan(root: Path) -> dict[str, Any]:
-    """Return the scan result for the repository at ``root``."""
+def scan(root: Path, denylist: list[str] | None = None) -> dict[str, Any]:
+    """Return the scan result for the repository at ``root``.
+
+    ``denylist`` holds terms that must not appear in the history; findings refer
+    to a term by its 1-based position in the list, never by its text.
+    """
     if not has_commits(root):
         checks = [
             result(check_id, "unknown", "the repository has no commits") for check_id in CHECK_IDS
@@ -296,8 +381,9 @@ def scan(root: Path) -> dict[str, Any]:
     else:
         checks = [
             check_commit_identity(root),
-            *check_history_content(root),
+            *check_history_content(root, denylist),
             check_sensitive_files(root),
+            check_env_files(root),
             check_license(root),
             check_readme(root),
         ]
@@ -320,7 +406,20 @@ def is_git_repository(path: Path) -> bool:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=(__doc__ or "").splitlines()[0])
     parser.add_argument("root", type=Path, help="path to the repository to scan")
+    parser.add_argument(
+        "--denylist",
+        type=Path,
+        help="file with one term per line that must not appear in the history",
+    )
     args = parser.parse_args(argv)
+    denylist = None
+    if args.denylist is not None:
+        try:
+            lines = args.denylist.read_text(encoding="utf-8").splitlines()
+        except OSError:
+            print("cannot read the denylist file", file=sys.stderr)
+            return 2
+        denylist = [t.strip() for t in lines if t.strip() and not t.strip().startswith("#")]
     root: Path = args.root
     try:
         is_repository = root.is_dir() and is_git_repository(root)
@@ -331,7 +430,7 @@ def main(argv: list[str] | None = None) -> int:
     if not is_repository:
         print("not a Git repository: the given path", file=sys.stderr)
         return 2
-    json.dump(scan(root), sys.stdout, indent=2)
+    json.dump(scan(root, denylist), sys.stdout, indent=2)
     sys.stdout.write("\n")
     return 0
 
