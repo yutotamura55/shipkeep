@@ -57,7 +57,7 @@ docker compose run --rm dev scripts/check.sh
 docker compose run --rm dev sh -c "ruff format . && ruff check --fix ."
 ```
 
-CI（`.github/workflows/ci.yml`）は、PR と `main` への push のたびに、Python 3.10（対応する最も古い版）と 3.14（コンテナの版）で同じ検査を実行します。
+CI（`.github/workflows/ci.yml`）は、PR と `main` への push のたびに、Python 3.10（対応する最も古い版）、3.11、3.14（コンテナの版）で同じ検査を実行します。
 
 ## ライセンス
 
