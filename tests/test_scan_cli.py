@@ -21,8 +21,10 @@ def test_scan_prints_json_for_a_git_repository(
     assert scan.main([str(tmp_path)]) == 0
 
     result = json.loads(capsys.readouterr().out)
-    assert result["schema"] == scan.SCHEMA_VERSION
-    assert result["checks"] == []
+    assert result["schema"] == 1
+    assert result["checks"], "the scan reports at least one check"
+    for check in result["checks"]:
+        assert check["status"] in {"pass", "fail", "unknown", "not_applicable"}
 
 
 def test_scan_output_does_not_contain_the_local_path(
