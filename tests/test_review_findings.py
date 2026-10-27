@@ -191,7 +191,13 @@ def test_content_that_looks_like_a_patch_header_does_not_hide_later_lines(tmp_pa
     found = check(scan.scan(tmp_path), "history_secrets")
 
     assert finding_list(found) == [
-        {"kind": "aws_access_key_id", "commit": commit[:12], "path": "notes.md", "line": 2}
+        {
+            "kind": "aws_access_key_id",
+            "commit": commit[:12],
+            "path": "notes.md",
+            "line": 2,
+            "context": "key = '<aws_access_key_id>'",
+        }
     ]
 
 

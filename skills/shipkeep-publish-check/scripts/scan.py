@@ -7,7 +7,8 @@ document to standard output, so that an agent can turn each check into a
 report row.
 
 The output never contains the value of a secret, personal data, a denylist
-term, or a local path: findings give the kind and the location only.
+term, or a local path: findings give the kind, the location, and the line with
+those values masked.
 """
 
 from __future__ import annotations
@@ -22,7 +23,7 @@ import sys
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
-from typing import Any
+from typing import Any, NoReturn
 
 SCHEMA_VERSION = 1
 
@@ -44,6 +45,11 @@ GIT_SETTINGS = (
 # repository is made public. Stashes and other remotes are left out.
 PUBLISHED_REFS = ("--branches", "--tags", "--remotes=origin")
 PUBLISHED_REF_PREFIXES = ("refs/heads", "refs/tags", "refs/remotes/origin")
+# Merge commits are compared with all their parents, so that only the lines a
+# merge itself introduces (such as a conflict resolution) are searched there.
+MERGE_DIFFS = "--diff-merges=dense-combined"
+ORIGIN_FETCH_ALL = "refs/heads/*:refs/remotes/origin/*"
+COMMIT_HASH = re.compile(r"[0-9a-f]{40}(?:[0-9a-f]{24})?")
 
 LICENSE_NAMES = {"license", "license.md", "license.txt", "licence", "licence.md", "copying"}
 README_NAMES = {"readme", "readme.md", "readme.rst", "readme.txt"}
@@ -57,6 +63,10 @@ SECRET_PATTERNS = {
     "llm_api_key": re.compile(r"\bsk-(?:ant-|proj-)?[A-Za-z0-9_-]{32,}"),
     "stripe_secret_key": re.compile(r"\b[rs]k_live_[0-9A-Za-z]{24,}"),
 }
+# Long runs of key-like characters are masked in context lines even when no
+# pattern names them, because they may be secrets of an unknown format.
+KEY_LIKE = re.compile(r"[A-Za-z0-9+/_-]{20,}")
+CONTEXT_LENGTH = 200
 
 EMAIL = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}")
 # Documentation domains reserved by RFC 2606. Only the exact domains are public;
@@ -87,15 +97,15 @@ FILE_EXTENSIONS = {
 }
 USER_NAME = r"([A-Za-z0-9_.-]+)(?![A-Za-z0-9_.-])"
 HOME_PATHS = (
-    re.compile(r"/home/" + USER_NAME),
-    re.compile(r"/Users/" + USER_NAME),
-    re.compile(r"[A-Za-z]:\\+Users\\+" + USER_NAME),
+    re.compile(r"(/home/)" + USER_NAME),
+    re.compile(r"(/Users/)" + USER_NAME),
+    re.compile(r"([A-Za-z]:\\+Users\\+)" + USER_NAME),
 )
 # User names that appear in documentation and CI rather than on a real machine.
 GENERIC_USER_NAMES = {"user", "username", "runner", "ubuntu", "app", "node", "vscode", "shared"}
 
 # Lock files copy the published contact details of third-party package authors,
-# so they are searched for secrets but not for personal data.
+# so addresses in them are not reported. Local paths still are.
 LOCK_FILE_NAMES = {
     "package-lock.json",
     "npm-shrinkwrap.json",
@@ -110,10 +120,54 @@ LOCK_FILE_NAMES = {
     "Gemfile.lock",
     "go.sum",
 }
+# Binary files are read as text so that a -diff attribute cannot hide text;
+# files with these extensions are skipped to avoid matches in binary data.
+BINARY_EXTENSIONS = {
+    ".png",
+    ".jpg",
+    ".jpeg",
+    ".gif",
+    ".webp",
+    ".avif",
+    ".ico",
+    ".bmp",
+    ".tif",
+    ".tiff",
+    ".pdf",
+    ".zip",
+    ".gz",
+    ".tgz",
+    ".bz2",
+    ".xz",
+    ".7z",
+    ".jar",
+    ".war",
+    ".class",
+    ".woff",
+    ".woff2",
+    ".ttf",
+    ".otf",
+    ".eot",
+    ".mp3",
+    ".mp4",
+    ".mov",
+    ".webm",
+    ".wasm",
+    ".so",
+    ".dll",
+    ".dylib",
+    ".exe",
+    ".bin",
+    ".pyc",
+    ".sqlite",
+    ".db",
+}
 
 ENV_EXAMPLE_SUFFIXES = (".example", ".sample", ".template", ".dist")
 PRIVATE_KEY_FILE_NAMES = {"id_rsa", "id_dsa", "id_ecdsa", "id_ed25519"}
-PRIVATE_KEY_FILE_SUFFIXES = (".pem", ".key", ".p12", ".pfx", ".jks", ".keystore")
+# Key stores always hold private keys. PEM files are often public certificates;
+# a private key inside one is found by the secret patterns instead.
+PRIVATE_KEY_FILE_SUFFIXES = (".p12", ".pfx", ".jks", ".keystore")
 CREDENTIAL_FILE_NAMES = {"credentials.json", ".netrc", ".pypirc"}
 
 GITHUB_REMOTE = re.compile(
@@ -142,7 +196,7 @@ TEST_PATHSPECS = (
     ":(exclude,glob)**/*.spec.*",
 )
 
-HIDDEN_PATH = "(hidden: the path contains a denylist term)"
+HIDDEN_PATH = "(hidden: the path contains confidential text)"
 
 
 def git_command(root: Path, *args: str) -> list[str]:
@@ -152,14 +206,14 @@ def git_command(root: Path, *args: str) -> list[str]:
     return [*command, *args]
 
 
-def git(root: Path, *args: str) -> str:
+def git(root: Path, *args: str, check: bool = True) -> str:
     """Run a read-only Git command in ``root`` and return its standard output."""
     completed = subprocess.run(
         git_command(root, *args),
         capture_output=True,
         encoding="utf-8",
         errors="replace",
-        check=True,
+        check=check,
     )
     return completed.stdout
 
@@ -204,12 +258,18 @@ class AddedLine:
 
 
 def added_lines(root: Path) -> Iterator[AddedLine]:
-    """Yield every line that a published commit added, with its location."""
+    """Yield every line that a published commit added, with its location.
+
+    For a merge commit, only the lines that differ from every parent count.
+    """
     log = git(
         root,
         "log",
         *PUBLISHED_REFS,
+        MERGE_DIFFS,
         "--patch",
+        "--text",
+        "--no-textconv",
         "--unified=0",
         "--no-color",
         "--no-ext-diff",
@@ -221,23 +281,34 @@ def added_lines(root: Path) -> Iterator[AddedLine]:
     commit = ""
     path: str | None = None
     in_header = False
+    parents = 1
     line = 0
     for text in log.splitlines():
         if text.startswith("\0commit "):
             commit = text.removeprefix("\0commit ")[:12]
             path, in_header = None, False
-        elif text.startswith("diff --git "):
+        elif text.startswith(("diff --git ", "diff --cc ", "diff --combined ")):
             path, in_header = None, True
         elif in_header and text.startswith("+++ "):
             # Git ends the name with a tab when it contains a space.
             name = unquote_path(text.removeprefix("+++ ").rstrip("\t"))
             path = name.removeprefix("b/") if name.startswith("b/") else None
-        elif text.startswith("@@ "):
+            if path is not None and PurePosixPath(path).suffix.lower() in BINARY_EXTENSIONS:
+                path = None
+        elif text.startswith("@@"):
             in_header = False
+            # A hunk header has one more "@" than the commit has parents.
+            parents = len(text) - len(text.lstrip("@")) - 1
             match = re.search(r"\+(\d+)", text)
             line = int(match.group(1)) if match else 0
-        elif not in_header and text.startswith("+") and path is not None:
-            yield AddedLine(commit, path, line, text[1:])
+        elif text.startswith("\\"):
+            continue  # "\ No newline at end of file"
+        elif not in_header and path is not None and text[:parents] != " " * parents:
+            markers = text[:parents]
+            if "-" in markers:
+                continue  # a removed line is not in the result
+            if markers == "+" * parents:
+                yield AddedLine(commit, path, line, text[parents:])
             line += 1
 
 
@@ -247,6 +318,7 @@ def added_files(root: Path) -> Iterator[tuple[str, str]]:
         root,
         "log",
         *PUBLISHED_REFS,
+        MERGE_DIFFS,
         "--diff-filter=A",
         "--name-only",
         "--no-renames",
@@ -262,10 +334,11 @@ def added_files(root: Path) -> Iterator[tuple[str, str]]:
 
 def commit_messages(root: Path) -> Iterator[tuple[str, str]]:
     """Yield the abbreviated hash and the full message of every published commit."""
-    log = git(root, "log", *PUBLISHED_REFS, "--format=%H%x00%B%x01")
-    for entry in log.split("\x01"):
-        commit, _, message = entry.strip("\n").partition("\0")
-        if commit:
+    # Git does not allow NUL in a commit message, so -z separates records safely.
+    log = git(root, "log", *PUBLISHED_REFS, "-z", "--format=%H%n%B")
+    for record in log.split("\0"):
+        commit, _, message = record.partition("\n")
+        if COMMIT_HASH.fullmatch(commit):
             yield commit[:12], message
 
 
@@ -291,15 +364,42 @@ def is_public_address(address: str) -> bool:
     )
 
 
-def personal_data_kinds(text: str) -> list[str]:
-    kinds = []
-    if any(not is_public_address(address) for address in EMAIL.findall(text)):
-        kinds.append("email_address")
+def has_personal_address(text: str) -> bool:
+    return any(not is_public_address(address) for address in EMAIL.findall(text))
+
+
+def has_home_path(text: str) -> bool:
+    return any(
+        name.lower() not in GENERIC_USER_NAMES
+        for pattern in HOME_PATHS
+        for _, name in pattern.findall(text)
+    )
+
+
+def has_secret(text: str) -> bool:
+    return any(pattern.search(text) for pattern in SECRET_PATTERNS.values())
+
+
+def matching_terms(text: str, denylist: list[str]) -> list[int]:
+    """Return the 1-based numbers of the denylist terms that appear in ``text``."""
+    lowered = text.lower()
+    return [number for number, term in enumerate(denylist, 1) if term.lower() in lowered]
+
+
+def masked(text: str, denylist: list[str]) -> str:
+    """Return ``text`` with every confidential value replaced by a placeholder."""
+    for kind, pattern in SECRET_PATTERNS.items():
+        text = pattern.sub(f"<{kind}>", text)
+    text = EMAIL.sub(
+        lambda m: m.group(0) if is_public_address(m.group(0)) else "<email_address>", text
+    )
     for pattern in HOME_PATHS:
-        if any(name.lower() not in GENERIC_USER_NAMES for name in pattern.findall(text)):
-            kinds.append("local_path")
-            break
-    return kinds
+        text = pattern.sub(lambda m: f"{m.group(1)}<user>", text)
+    for number, term in enumerate(denylist, 1):
+        text = re.sub(re.escape(term), f"<term {number}>", text, flags=re.IGNORECASE)
+    text = KEY_LIKE.sub("<redacted>", text)
+    text = text.strip()
+    return text if len(text) <= CONTEXT_LENGTH else text[:CONTEXT_LENGTH] + "..."
 
 
 def sensitive_file_kind(path: str) -> str | None:
@@ -319,10 +419,22 @@ def sensitive_file_kind(path: str) -> str | None:
     return None
 
 
-def matching_terms(text: str, denylist: list[str]) -> list[int]:
-    """Return the 1-based numbers of the denylist terms that appear in ``text``."""
-    lowered = text.lower()
-    return [number for number, term in enumerate(denylist, 1) if term.lower() in lowered]
+def check_history_coverage(root: Path) -> Check:
+    """Check that the local repository holds the whole history that would be published."""
+    findings: list[Finding] = []
+    if git(root, "rev-parse", "--is-shallow-repository").strip() == "true":
+        findings.append({"kind": "shallow_clone"})
+    fetch_specs = git(root, "config", "--get-all", "remote.origin.fetch", check=False).split()
+    if fetch_specs and not any(spec.lstrip("+") == ORIGIN_FETCH_ALL for spec in fetch_specs):
+        findings.append({"kind": "partial_fetch"})
+    if findings:
+        return result(
+            "history_coverage",
+            "unknown",
+            "the local copy lacks part of the history; other history checks may miss problems",
+            findings,
+        )
+    return result("history_coverage", "pass", "the local copy holds the full history")
 
 
 def check_commit_identity(root: Path) -> Check:
@@ -345,48 +457,68 @@ def check_commit_identity(root: Path) -> Check:
     return result("commit_identity", "pass", "every commit uses a GitHub noreply address")
 
 
-def check_history_content(root: Path, denylist: list[str] | None) -> list[Check]:
+@dataclass
+class HistoryFindings:
+    secrets: list[Finding]
+    personal: list[Finding]
+    terms: list[Finding]
+
+
+def search_history(root: Path, denylist: list[str]) -> HistoryFindings:
     """Search added lines, file names, messages, and refs for secrets, personal data, and terms."""
-    terms_to_find = denylist or []
-    secrets: list[Finding] = []
-    personal: list[Finding] = []
-    terms: list[Finding] = []
+    found = HistoryFindings([], [], [])
     for added in added_lines(root):
-        location = {"commit": added.commit, "path": added.path, "line": added.line}
+        location = {
+            "commit": added.commit,
+            "path": added.path,
+            "line": added.line,
+            "context": masked(added.text, denylist),
+        }
         for kind, pattern in SECRET_PATTERNS.items():
             if pattern.search(added.text):
-                secrets.append({"kind": kind, **location})
-        if PurePosixPath(added.path).name not in LOCK_FILE_NAMES:
-            for kind in personal_data_kinds(added.text):
-                personal.append({"kind": kind, **location})
-        for number in matching_terms(added.text, terms_to_find):
-            terms.append({"kind": "term_in_content", "term": number, **location})
+                found.secrets.append({"kind": kind, **location})
+        is_lock_file = PurePosixPath(added.path).name in LOCK_FILE_NAMES
+        if has_personal_address(added.text) and not is_lock_file:
+            found.personal.append({"kind": "email_address", **location})
+        if has_home_path(added.text):
+            found.personal.append({"kind": "local_path", **location})
+        for number in matching_terms(added.text, denylist):
+            found.terms.append({"kind": "term_in_content", "term": number, **location})
     for commit, path in added_files(root):
-        for number in matching_terms(path, terms_to_find):
-            terms.append({"kind": "term_in_path", "term": number, "commit": commit})
+        for number in matching_terms(path, denylist):
+            found.terms.append({"kind": "term_in_path", "term": number, "commit": commit})
     for commit, message in commit_messages(root):
-        if any(not is_public_address(address) for address in EMAIL.findall(message)):
-            personal.append({"kind": "email_in_commit_message", "commit": commit})
-        for number in matching_terms(message, terms_to_find):
-            terms.append({"kind": "term_in_commit_message", "term": number, "commit": commit})
+        if has_personal_address(message):
+            found.personal.append({"kind": "email_in_commit_message", "commit": commit})
+        if has_home_path(message):
+            found.personal.append({"kind": "local_path_in_commit_message", "commit": commit})
+        for number in matching_terms(message, denylist):
+            found.terms.append({"kind": "term_in_commit_message", "term": number, "commit": commit})
     for ref in published_ref_names(root):
-        for number in matching_terms(ref, terms_to_find):
-            terms.append({"kind": "term_in_ref", "term": number})
+        for number in matching_terms(ref, denylist):
+            found.terms.append({"kind": "term_in_ref", "term": number})
+    return found
 
-    if secrets:
+
+def check_history_content(root: Path, denylist: list[str] | None) -> list[Check]:
+    found = search_history(root, denylist or [])
+    if found.secrets:
         secrets_check = result(
-            "history_secrets", "fail", f"{len(secrets)} added line(s) look like secrets", secrets
+            "history_secrets",
+            "fail",
+            f"{len(found.secrets)} added line(s) look like secrets",
+            found.secrets,
         )
     else:
         secrets_check = result(
             "history_secrets", "pass", "no added line matches the built-in secret patterns"
         )
-    if personal:
+    if found.personal:
         personal_check = result(
             "history_personal_data",
             "fail",
-            f"{len(personal)} place(s) in the history contain personal data",
-            personal,
+            f"{len(found.personal)} place(s) in the history contain personal data",
+            found.personal,
         )
     else:
         personal_check = result(
@@ -394,12 +526,12 @@ def check_history_content(root: Path, denylist: list[str] | None) -> list[Check]
         )
     if denylist is None:
         terms_check = result("denylist", "not_applicable", "no denylist was given")
-    elif terms:
+    elif found.terms:
         terms_check = result(
             "denylist",
             "fail",
-            f"{len(terms)} place(s) in the history contain a denylist term",
-            terms,
+            f"{len(found.terms)} place(s) in the history contain a denylist term",
+            found.terms,
         )
     else:
         terms_check = result("denylist", "pass", "no denylist term appears in the history")
@@ -430,50 +562,94 @@ def tree_paths(root: Path, *options: str) -> list[str]:
 
 
 def reads_env_file(root: Path) -> bool:
-    """Return whether code outside the tests at HEAD shows signs of reading a .env file."""
+    """Return whether code outside the tests at HEAD shows signs of loading a .env file."""
     return git_succeeds(
-        root, "grep", "-I", "-q", "-E", ENV_FILE_USAGE, "HEAD", "--", ":(top)", *TEST_PATHSPECS
+        root,
+        "grep",
+        "-I",
+        "-q",
+        "--no-textconv",
+        "-E",
+        ENV_FILE_USAGE,
+        "HEAD",
+        "--",
+        ":(top)",
+        *TEST_PATHSPECS,
     )
 
 
-def gitignore_ignores(root: Path, paths: list[str], name: str) -> bool:
-    """Return whether the top-level .gitignore at HEAD ignores a top-level file ``name``."""
-    if ".gitignore" not in paths:
-        return False
+def gitignore_matches(pattern: str, relative: str) -> bool | None:
+    """Return whether one .gitignore line ignores the file at ``relative``.
+
+    ``relative`` is relative to the directory of the .gitignore. Returns None
+    when the line does not apply, True when it ignores the file, and False when
+    it re-includes it.
+    """
+    pattern = pattern.strip()
+    if not pattern or pattern.startswith("#"):
+        return None
+    negated = pattern.startswith("!")
+    pattern = pattern.removeprefix("!")
+    if pattern.endswith("/"):
+        return None  # matches directories only
+    if pattern.startswith("**/"):
+        pattern = pattern.removeprefix("**/")
+        candidate = PurePosixPath(relative).name if "/" not in pattern else relative
+    elif "/" in pattern:
+        pattern, candidate = pattern.removeprefix("/"), relative
+    else:
+        candidate = PurePosixPath(relative).name
+    if not fnmatch.fnmatchcase(candidate, pattern):
+        return None
+    return not negated
+
+
+def is_ignored(root: Path, paths: set[str], target: str) -> bool:
+    """Return whether the .gitignore files at HEAD ignore the file ``target``."""
     ignored = False
-    for raw in git(root, "show", "HEAD:.gitignore").splitlines():
-        pattern = raw.strip()
-        if not pattern or pattern.startswith("#"):
+    parts = PurePosixPath(target).parts
+    for depth in range(len(parts)):
+        directory = "/".join(parts[:depth])
+        gitignore = f"{directory}/.gitignore" if directory else ".gitignore"
+        if gitignore not in paths:
             continue
-        negated = pattern.startswith("!")
-        pattern = pattern.removeprefix("!")
-        if pattern.endswith("/"):
-            continue  # matches directories only
-        pattern = pattern.removeprefix("**/").removeprefix("/")
-        if "/" in pattern:
-            continue  # anchored below the top level
-        if fnmatch.fnmatchcase(name, pattern):
-            ignored = not negated
+        relative = "/".join(parts[depth:])
+        for line in git(root, "show", f"HEAD:{gitignore}").splitlines():
+            matched = gitignore_matches(line, relative)
+            if matched is not None:
+                ignored = matched
     return ignored
 
 
+def env_targets(root: Path, paths: list[str]) -> dict[str, set[str]]:
+    """Return each local env file the project expects, with the example names that cover it."""
+    targets: dict[str, set[str]] = {}
+    for path in paths:
+        directory, name = str(PurePosixPath(path).parent), PurePosixPath(path).name
+        prefix = "" if directory == "." else f"{directory}/"
+        if name in DOTENV_EXAMPLE_NAMES or name == ".env":
+            targets[f"{prefix}.env"] = DOTENV_EXAMPLE_NAMES
+        if name in WRANGLER_CONFIG_NAMES | WRANGLER_EXAMPLE_NAMES:
+            targets[f"{prefix}.dev.vars"] = WRANGLER_EXAMPLE_NAMES
+    if ".env" not in targets and reads_env_file(root):
+        targets[".env"] = DOTENV_EXAMPLE_NAMES
+    return targets
+
+
 def check_env_files(root: Path) -> Check:
-    """Check that a project that keeps secrets in a local file ignores it and commits an example."""
+    """Check that each local env file a project expects is ignored and has an example."""
     paths = tree_paths(root, "-r")
-    names = {PurePosixPath(path).name for path in paths}
-    required = []
-    if names & DOTENV_EXAMPLE_NAMES or reads_env_file(root):
-        required.append((".env", DOTENV_EXAMPLE_NAMES))
-    if names & (WRANGLER_CONFIG_NAMES | WRANGLER_EXAMPLE_NAMES):
-        required.append((".dev.vars", WRANGLER_EXAMPLE_NAMES))
-    if not required:
+    path_set = set(paths)
+    targets = env_targets(root, paths)
+    if not targets:
         return result("env_files", "not_applicable", "the project does not read a local env file")
     findings: list[Finding] = []
-    for file, examples in required:
-        if not gitignore_ignores(root, paths, file):
-            findings.append({"kind": "env_not_ignored", "path": ".gitignore", "file": file})
-        if not names & examples:
-            findings.append({"kind": "env_example_missing", "file": file})
+    for target, examples in sorted(targets.items()):
+        if not is_ignored(root, path_set, target):
+            findings.append({"kind": "env_not_ignored", "path": ".gitignore", "file": target})
+        directory = PurePosixPath(target).parent
+        if not any(str(directory / example).removeprefix("./") in path_set for example in examples):
+            findings.append({"kind": "env_example_missing", "file": target})
     if findings:
         return result(
             "env_files", "fail", "local env files are not set up for publishing", findings
@@ -500,13 +676,8 @@ def check_readme(root: Path) -> Check:
 
 def github_repository(root: Path) -> str | None:
     """Return "owner/name" of the origin remote when it is on GitHub."""
-    completed = subprocess.run(
-        git_command(root, "config", "--get", "remote.origin.url"),
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    match = GITHUB_REMOTE.match(completed.stdout.strip())
+    url = git(root, "config", "--get", "remote.origin.url", check=False).strip()
+    match = GITHUB_REMOTE.match(url)
     return match.group(1) if match else None
 
 
@@ -520,7 +691,8 @@ def fetch_security_settings(repository: str) -> dict[str, Any] | None:
         completed = subprocess.run(
             ["gh", "api", f"repos/{repository}"],
             capture_output=True,
-            text=True,
+            encoding="utf-8",
+            errors="replace",
             check=False,
         )
     except OSError:
@@ -564,16 +736,23 @@ def check_github_settings(
     return result("github_settings", "pass", "secret scanning and push protection are on")
 
 
-def hide_paths_with_terms(checks: list[Check], denylist: list[str]) -> None:
-    """Replace every finding path that contains a denylist term, so the output never shows one."""
+def hide_confidential_paths(checks: list[Check], denylist: list[str]) -> None:
+    """Replace every finding path that holds a secret, personal data, or a denylist term."""
     for check in checks:
         for finding in check["findings"]:
-            path = finding.get("path")
-            if isinstance(path, str) and matching_terms(path, denylist):
-                finding["path"] = HIDDEN_PATH
+            for field in ("path", "file"):
+                value = finding.get(field)
+                if isinstance(value, str) and (
+                    has_secret(value)
+                    or has_personal_address(value)
+                    or has_home_path(value)
+                    or matching_terms(value, denylist)
+                ):
+                    finding[field] = HIDDEN_PATH
 
 
 CHECK_IDS = (
+    "history_coverage",
     "commit_identity",
     "history_secrets",
     "history_personal_data",
@@ -598,6 +777,7 @@ def scan(root: Path, denylist: list[str] | None = None) -> dict[str, Any]:
         ]
     else:
         checks = [
+            check_history_coverage(root),
             check_commit_identity(root),
             *check_history_content(root, denylist),
             check_sensitive_files(root),
@@ -606,7 +786,7 @@ def scan(root: Path, denylist: list[str] | None = None) -> dict[str, Any]:
             check_readme(root),
         ]
     checks.append(check_github_settings(root))
-    hide_paths_with_terms(checks, denylist or [])
+    hide_confidential_paths(checks, denylist or [])
     counts = {
         status: sum(1 for check in checks if check["status"] == status)
         for status in ("pass", "fail", "unknown", "not_applicable")
@@ -632,8 +812,16 @@ def read_denylist(path: Path) -> list[str]:
     return [term.strip() for term in lines if term.strip() and not term.strip().startswith("#")]
 
 
+class QuietArgumentParser(argparse.ArgumentParser):
+    """Report argument errors without repeating the arguments, which may be local paths."""
+
+    def error(self, message: str) -> NoReturn:
+        self.print_usage(sys.stderr)
+        self.exit(2, "error: invalid arguments; run with --help\n")
+
+
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description=(__doc__ or "").splitlines()[0])
+    parser = QuietArgumentParser(description=(__doc__ or "").splitlines()[0])
     parser.add_argument("root", type=Path, help="path to the repository to scan")
     parser.add_argument(
         "--denylist",
@@ -663,7 +851,7 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     try:
         output = scan(root, denylist)
-    except subprocess.CalledProcessError:
+    except (subprocess.CalledProcessError, OSError, ValueError):
         print("git failed while reading the repository", file=sys.stderr)
         return 2
     json.dump(output, sys.stdout, indent=2)

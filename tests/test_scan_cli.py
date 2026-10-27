@@ -93,4 +93,7 @@ def test_scan_counts_the_checks_by_status(tmp_path: Path) -> None:
 
     result = scan.scan(tmp_path)
 
-    assert result["counts"] == {"pass": 5, "fail": 1, "unknown": 0, "not_applicable": 3}
+    # pass: history_coverage, commit_identity, history_secrets, history_personal_data,
+    #       sensitive_files, readme; fail: license;
+    # not_applicable: denylist, env_files, github_settings.
+    assert result["counts"] == {"pass": 6, "fail": 1, "unknown": 0, "not_applicable": 3}

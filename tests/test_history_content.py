@@ -43,7 +43,13 @@ def test_secrets_report_the_commit_path_and_line_of_a_key(tmp_path: Path) -> Non
 
     assert found["status"] == "fail"
     assert findings(found) == [
-        {"kind": "aws_access_key_id", "commit": commit[:12], "path": "config.py", "line": 3}
+        {
+            "kind": "aws_access_key_id",
+            "commit": commit[:12],
+            "path": "config.py",
+            "line": 3,
+            "context": "key = '<aws_access_key_id>'",
+        }
     ]
 
 
@@ -96,8 +102,20 @@ def test_personal_data_finds_an_address_and_a_home_path(tmp_path: Path) -> None:
 
     assert found["status"] == "fail"
     assert findings(found) == [
-        {"kind": "email_address", "commit": commit[:12], "path": "notes.md", "line": 1},
-        {"kind": "local_path", "commit": commit[:12], "path": "notes.md", "line": 2},
+        {
+            "kind": "email_address",
+            "commit": commit[:12],
+            "path": "notes.md",
+            "line": 1,
+            "context": "mail <email_address>",
+        },
+        {
+            "kind": "local_path",
+            "commit": commit[:12],
+            "path": "notes.md",
+            "line": 2,
+            "context": "see /home/<user>/projects/demo",
+        },
     ]
 
 

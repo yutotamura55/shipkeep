@@ -98,6 +98,7 @@ def test_denylist_reports_terms_in_content_and_messages_by_their_number(tmp_path
             "commit": in_file[:12],
             "path": "notes.md",
             "line": 2,
+            "context": "<term 2> project",
         },
         {"kind": "term_in_commit_message", "term": 2, "commit": in_message[:12]},
     ]
@@ -197,3 +198,16 @@ def test_env_files_ignore_a_script_that_only_sets_process_env(tmp_path: Path) ->
     )
 
     assert check(scan.scan(tmp_path), "env_files")["status"] == "not_applicable"
+
+
+def test_env_files_apply_when_an_env_file_is_committed(tmp_path: Path) -> None:
+    repo = GitRepo(tmp_path)
+    repo.commit({"api/.env": "KEY=1\n", "README.md": "# demo\n"})
+
+    found = check(scan.scan(tmp_path), "env_files")
+
+    assert found["status"] == "fail"
+    assert found["findings"] == [
+        {"kind": "env_not_ignored", "path": ".gitignore", "file": "api/.env"},
+        {"kind": "env_example_missing", "file": "api/.env"},
+    ]

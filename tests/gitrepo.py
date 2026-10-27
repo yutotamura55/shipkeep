@@ -17,7 +17,7 @@ class GitRepo:
         path.mkdir(parents=True, exist_ok=True)
         self.git("init", "--quiet", "--initial-branch=main")
 
-    def git(self, *args: str, email: str = NOREPLY_EMAIL) -> str:
+    def git(self, *args: str, email: str = NOREPLY_EMAIL, check: bool = True) -> str:
         env = {
             **os.environ,
             "GIT_AUTHOR_NAME": "Tester",
@@ -31,7 +31,7 @@ class GitRepo:
             ["git", "-C", str(self.path), *args],
             capture_output=True,
             text=True,
-            check=True,
+            check=check,
             env=env,
         )
         return result.stdout
