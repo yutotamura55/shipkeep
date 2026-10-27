@@ -26,7 +26,7 @@ npx skills add yutotamura55/shipkeep --skill shipkeep-publish-check --agent clau
 ```
 
 エージェントに「このリポジトリを公開してよいか確かめて」のように頼むと、skill が履歴を調べ、項目ごとに「満たす」「不足」「確認できない」と根拠を報告します。
-Python 3.11 以上と Git が必要です。GitHub の設定も確かめるには、認証済みの `gh` を使います。
+Python 3.10 以上と Git が必要です。GitHub の設定も確かめるには、認証済みの `gh` を使います。
 
 公開してはいけない語（取引先の名前など）は、リポジトリの外のファイル（既定は `~/.config/shipkeep/denylist.txt`）に 1 行に 1 語ずつ書きます。報告には語そのものを出さず、何行目の語かだけを示します。
 
@@ -57,7 +57,7 @@ docker compose run --rm dev scripts/check.sh
 docker compose run --rm dev sh -c "ruff format . && ruff check --fix ."
 ```
 
-CI（`.github/workflows/ci.yml`）は、PR と `main` への push のたびに、Python 3.11（対応する最も古い版）と 3.14（コンテナの版）で同じ検査を実行します。
+CI（`.github/workflows/ci.yml`）は、PR と `main` への push のたびに、Python 3.10（対応する最も古い版）と 3.14（コンテナの版）で同じ検査を実行します。
 
 ## ライセンス
 

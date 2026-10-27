@@ -40,7 +40,7 @@ output of the commands you run:
    product names that must not be published. Lines starting with `#` are
    comments. Use the file the user names, or `~/.config/shipkeep/denylist.txt`
    when it exists. Never ask the user to type the terms into the conversation.
-3. **Run the scan** with Python 3.11 or newer and Git. `gh` is optional: when it
+3. **Run the scan** with Python 3.10 or newer and Git. `gh` is optional: when it
    is installed and signed in, the scan also reads the GitHub settings.
 
    ```bash
