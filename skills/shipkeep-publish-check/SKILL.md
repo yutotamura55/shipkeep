@@ -27,6 +27,9 @@ output of the commands you run:
 - Do not open the files or commits behind a finding (for example with
   `git show`): that prints the values into the command output. Judge from the
   `context` field instead, which is the line with the values masked.
+- Do not copy `context` lines into the report. Masking is best effort (see
+  Limits), so describe what a line shows instead ("an AWS access key ID
+  assigned to `key`").
 
 ## Steps
 
@@ -107,9 +110,11 @@ operations to the user.
 State these limits in the report when they matter:
 
 - Secret detection uses built-in patterns for common key formats. It does not
-  find every kind of secret, such as passwords in custom formats. Masked
-  context lines hide any long key-like text, so check such lines by hand when
-  in doubt.
+  find every kind of secret, such as passwords in custom formats.
+- `context` masks detected values, email addresses, local paths, denylist
+  terms, values after `=` or `:`, quoted text, and long key-like text. A short
+  value in another form can still show, which is why the report describes
+  lines instead of quoting them.
 - `env_files` notices a `.env` file only when one is committed, an example
   exists, or the code loads it explicitly (for example with `dotenv`).
   Frameworks that load `.env` on their own, such as Vite, Next.js, and Nuxt,

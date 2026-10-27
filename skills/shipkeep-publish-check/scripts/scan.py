@@ -67,13 +67,17 @@ SECRET_PATTERNS = {
 # pattern names them, because they may be secrets of an unknown format.
 KEY_LIKE = re.compile(r"[A-Za-z0-9+/_-]{20,}")
 # A whole local path, so that directory names after the user name stay hidden.
+# Inside brackets or quotes a path may hold spaces, so it runs to the closer.
 LOCAL_PATH = re.compile(
-    r"(?:/home/|/Users/)[A-Za-z0-9_.-]+(?:/[^\s'\"`)\]>]*)?"
-    r"|[A-Za-z]:\\+Users\\+[A-Za-z0-9_.-]+(?:\\[^\s'\"`)\]>]*)?"
+    r"(?<=[(\[<'\"`])(?:/home/|/Users/|[A-Za-z]:\\+Users\\+)[A-Za-z0-9_.-]+[^)\]>'\"`]*"
+    r"|(?:/home/|/Users/)[A-Za-z0-9_.-]+(?:/\S*)?"
+    r"|[A-Za-z]:\\+Users\\+[A-Za-z0-9_.-]+(?:\\\S*)?"
 )
+# Placeholders this script writes into context lines; they are left as they are.
+PLACEHOLDER = r"<(?:[a-z_]+|term \d+)>"
 # Values after "=" or ":" and inside quotes may be passwords of any length.
-ASSIGNED_VALUE = re.compile(r"([=:]\s*)(?!<)([^\s'\",;<>]+)")
-QUOTED = re.compile(r"(['\"])(?!<[^<>]*>\1)[^'\"]*\1")
+ASSIGNED_VALUE = re.compile(r"([=:]\s*)(?!" + PLACEHOLDER + r")([^\s'\"]+)")
+QUOTED = re.compile(r"(['\"])(?!" + PLACEHOLDER + r"\1)(?:(?!\1).)*\1")
 CONTEXT_LENGTH = 200
 
 EMAIL = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}")
@@ -198,6 +202,8 @@ PROJECT_MARKERS = (
     "pyproject.toml",
     "requirements.txt",
     "setup.py",
+    "setup.cfg",
+    "Pipfile",
     "compose.yaml",
     "compose.yml",
     "docker-compose.yml",
@@ -231,14 +237,10 @@ def git_command(root: Path, *args: str) -> list[str]:
 
 def git(root: Path, *args: str, check: bool = True) -> str:
     """Run a read-only Git command in ``root`` and return its standard output."""
-    completed = subprocess.run(
-        git_command(root, *args),
-        capture_output=True,
-        encoding="utf-8",
-        errors="replace",
-        check=check,
-    )
-    return completed.stdout
+    completed = subprocess.run(git_command(root, *args), capture_output=True, check=check)
+    # Decoded by hand: text mode would turn a bare CR in file content into LF,
+    # which could forge a line of the patch.
+    return completed.stdout.decode("utf-8", errors="replace")
 
 
 def git_succeeds(root: Path, *args: str) -> bool:
@@ -590,10 +592,14 @@ def tree_paths(root: Path, *options: str) -> list[str]:
 
 
 def project_directory(path: str, paths: set[str]) -> str:
-    """Return the nearest directory above ``path`` that holds a project file, or the top."""
+    """Return the nearest directory above ``path`` that holds a project file or an env example.
+
+    Returns "" (the top of the repository) when no such directory exists.
+    """
     directory = PurePosixPath(path).parent
+    markers = (*PROJECT_MARKERS, *sorted(DOTENV_EXAMPLE_NAMES))
     while str(directory) != ".":
-        if any(f"{directory}/{marker}" in paths for marker in PROJECT_MARKERS):
+        if any(f"{directory}/{marker}" in paths for marker in markers):
             return f"{directory}/"
         directory = directory.parent
     return ""

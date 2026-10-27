@@ -283,3 +283,60 @@ def test_env_use_in_a_subproject_does_not_require_a_root_env(tmp_path: Path) -> 
     )
 
     assert check(scan.scan(tmp_path), "env_files")["status"] == "pass"
+
+
+# Third round of the independent review.
+
+
+def test_carriage_returns_in_content_cannot_forge_commit_records(tmp_path: Path) -> None:
+    repo = GitRepo(tmp_path)
+    fake = "\0commit " + "a" * 40
+    repo.commit({"data.txt": f"x\r{fake}\r\ndiff --git a/b b/b\n{AWS_KEY_ID}\n"})
+
+    assert check(scan.scan(tmp_path), "history_secrets")["status"] == "fail"
+
+
+@pytest.mark.parametrize(
+    ("line", "expected"),
+    [
+        (
+            f'AWS={AWS_KEY_ID} pw="it\'s secret"',
+            'AWS=<aws_access_key_id> pw="<redacted>"',
+        ),
+        (f"AWS={AWS_KEY_ID} pw=abc,def;ghi", "AWS=<aws_access_key_id> pw=<redacted>"),
+        (f"AWS={AWS_KEY_ID} pw=<hunter2>", "AWS=<aws_access_key_id> pw=<redacted>"),
+    ],
+)
+def test_context_masks_values_in_unusual_forms(tmp_path: Path, line: str, expected: str) -> None:
+    repo = GitRepo(tmp_path)
+    repo.commit({"a.env": line + "\n"})
+
+    assert contexts_of(scan.scan(tmp_path), "history_secrets") == [expected]
+
+
+def test_context_masks_a_local_path_with_spaces_inside_brackets(tmp_path: Path) -> None:
+    repo = GitRepo(tmp_path)
+    repo.commit({"notes.md": f"see [plan]({HOME}/Client X/plan v2.md) today\n"})
+
+    contexts = contexts_of(scan.scan(tmp_path), "history_personal_data")
+
+    assert contexts == ["see [plan](<local_path>) today"]
+
+
+@pytest.mark.parametrize("marker", [None, "Pipfile"])
+def test_env_use_in_a_subproject_without_a_known_manifest(
+    tmp_path: Path, marker: str | None
+) -> None:
+    repo = GitRepo(tmp_path)
+    files = {
+        "api/app.py": "from dotenv import load_dotenv\nload_dotenv()\n",
+        "api/.gitignore": ".env\n",
+    }
+    if marker is None:
+        files["api/.env.example"] = "KEY=\n"
+    else:
+        files[f"api/{marker}"] = "[packages]\n"
+        files["api/.env.example"] = "KEY=\n"
+    repo.commit(files)
+
+    assert check(scan.scan(tmp_path), "env_files")["status"] == "pass"
