@@ -139,3 +139,25 @@ def test_sensitive_files_find_files_that_were_added_and_later_deleted(tmp_path: 
         {"kind": "env_file", "commit": first[:12], "path": ".env"},
         {"kind": "terraform_state", "commit": first[:12], "path": "infra/terraform.tfstate"},
     ]
+
+
+def test_personal_data_ignores_package_authors_in_lock_files(tmp_path: Path) -> None:
+    # Lock files copy the published contact of third-party package authors.
+    repo = GitRepo(tmp_path)
+    repo.commit({"package-lock.json": f'{{"author": "{PERSONAL_EMAIL}"}}\n'})
+
+    assert check(tmp_path, "history_personal_data")["status"] == "pass"
+
+
+def test_secrets_are_still_searched_in_lock_files(tmp_path: Path) -> None:
+    repo = GitRepo(tmp_path)
+    repo.commit({"package-lock.json": f'{{"token": "{GITHUB_TOKEN}"}}\n'})
+
+    assert check(tmp_path, "history_secrets")["status"] == "fail"
+
+
+def test_personal_data_ignores_text_that_only_looks_like_a_home_path(tmp_path: Path) -> None:
+    repo = GitRepo(tmp_path)
+    repo.commit({"scan.py": 're.compile(r"/Users/([^/\\s]+)/")\n'})
+
+    assert check(tmp_path, "history_personal_data")["status"] == "pass"

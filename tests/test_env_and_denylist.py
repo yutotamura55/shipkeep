@@ -121,3 +121,59 @@ def test_cli_reads_the_denylist_file_and_skips_comments(
     items = found["findings"]
     assert isinstance(items, list)
     assert [f["term"] for f in items] == [1]
+
+
+def test_env_files_ignore_environment_use_that_does_not_need_a_dotenv_file(
+    tmp_path: Path,
+) -> None:
+    # Passing the environment to a child process, and test fixtures that mention
+    # process.env, do not mean the project reads a .env file.
+    repo = GitRepo(tmp_path)
+    repo.commit(
+        {
+            "tool.py": "import os\nsubprocess.run(cmd, env={**os.environ})\n",
+            "tests/test_app.py": "fixture = 'const key = process.env.KEY'\n",
+        }
+    )
+
+    assert check(scan.scan(tmp_path), "env_files")["status"] == "not_applicable"
+
+
+def test_env_files_apply_to_a_python_project_that_loads_dotenv(tmp_path: Path) -> None:
+    repo = GitRepo(tmp_path)
+    repo.commit({"app/settings.py": "from dotenv import load_dotenv\nload_dotenv()\n"})
+
+    assert check(scan.scan(tmp_path), "env_files")["status"] == "fail"
+
+
+def test_env_files_ignore_words_that_only_mention_dotenv(tmp_path: Path) -> None:
+    repo = GitRepo(tmp_path)
+    repo.commit(
+        {
+            "checker.py": 'USAGE = r"dotenv|env_file|process\\.env"\nCHECK_ID = "env_files"\n',
+            "README.md": "This tool does not use dotenv.\n",
+        }
+    )
+
+    assert check(scan.scan(tmp_path), "env_files")["status"] == "not_applicable"
+
+
+def test_env_files_apply_to_a_compose_file_with_an_env_file(tmp_path: Path) -> None:
+    repo = GitRepo(tmp_path)
+    repo.commit({"compose.yaml": "services:\n  app:\n    env_file: .env\n"})
+
+    assert check(scan.scan(tmp_path), "env_files")["status"] == "fail"
+
+
+def test_env_files_ignore_code_that_only_names_dev_vars(tmp_path: Path) -> None:
+    repo = GitRepo(tmp_path)
+    repo.commit({"checker.py": 'SENSITIVE = {".env", ".dev.vars"}\n'})
+
+    assert check(scan.scan(tmp_path), "env_files")["status"] == "not_applicable"
+
+
+def test_env_files_apply_to_a_wrangler_project(tmp_path: Path) -> None:
+    repo = GitRepo(tmp_path)
+    repo.commit({"wrangler.jsonc": '{ "name": "demo" }\n', ".gitignore": ".dev.vars\n"})
+
+    assert check(scan.scan(tmp_path), "env_files")["status"] == "fail"

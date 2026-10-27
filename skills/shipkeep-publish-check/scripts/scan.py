@@ -46,11 +46,28 @@ EMAIL = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-
 EXAMPLE_DOMAINS = {"example.com", "example.org", "example.net"}
 HOME_PATHS = (
     re.compile(r"/home/([A-Za-z_][A-Za-z0-9_.-]*)/"),
-    re.compile(r"/Users/([^/\s]+)/"),
-    re.compile(r"[A-Za-z]:\\+Users\\+([^\\\s]+)"),
+    re.compile(r"/Users/([A-Za-z0-9_.-]+)/"),
+    re.compile(r"[A-Za-z]:\\+Users\\+([A-Za-z0-9_.-]+)"),
 )
 # User names that appear in documentation and CI rather than on a real machine.
 GENERIC_USER_NAMES = {"user", "username", "runner", "ubuntu", "app", "node", "vscode", "shared"}
+
+# Lock files copy the published contact details of third-party package authors,
+# so they are searched for secrets but not for personal data.
+LOCK_FILE_NAMES = {
+    "package-lock.json",
+    "npm-shrinkwrap.json",
+    "yarn.lock",
+    "pnpm-lock.yaml",
+    "bun.lock",
+    "poetry.lock",
+    "uv.lock",
+    "Pipfile.lock",
+    "Cargo.lock",
+    "composer.lock",
+    "Gemfile.lock",
+    "go.sum",
+}
 
 ENV_EXAMPLE_SUFFIXES = (".example", ".sample", ".template", ".dist")
 PRIVATE_KEY_FILE_NAMES = {"id_rsa", "id_dsa", "id_ecdsa", "id_ed25519"}
@@ -62,7 +79,24 @@ GITHUB_REMOTE = re.compile(
     r"([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+?)(?:\.git)?/?$"
 )
 
-ENV_USAGE = r"process\.env|import\.meta\.env|os\.environ|os\.getenv|\bgetenv\("
+# Code and configuration that read a .env file. The patterns match the call or
+# the key, not the bare word, so that text that only mentions dotenv does not
+# count. Plain os.environ is left out: it also passes the environment to
+# child processes.
+ENV_FILE_USAGE = (
+    r"load_dotenv\(|dotenv_values\(|require\(['\"]dotenv['\"]\)|dotenv/config"
+    r"|from ['\"]dotenv['\"]|^\s*env_file\s*[:=]|process\.env\.|import\.meta\.env\."
+)
+# Cloudflare Workers projects keep local secrets in .dev.vars.
+WRANGLER_CONFIG_NAMES = {"wrangler.toml", "wrangler.json", "wrangler.jsonc"}
+TEST_PATHSPECS = (
+    ":(exclude,glob)**/tests/**",
+    ":(exclude,glob)**/test/**",
+    ":(exclude,glob)**/__tests__/**",
+    ":(exclude,glob)**/test_*.py",
+    ":(exclude,glob)**/*.test.*",
+    ":(exclude,glob)**/*.spec.*",
+)
 ENV_EXAMPLE_NAMES = {
     ".env.example",
     ".env.sample",
@@ -227,8 +261,9 @@ def check_history_content(root: Path, denylist: list[str] | None) -> list[Check]
         for kind, pattern in SECRET_PATTERNS.items():
             if pattern.search(added.text):
                 secrets.append({"kind": kind, **location})
-        for kind in personal_data_kinds(added.text):
-            personal.append({"kind": kind, **location})
+        if PurePosixPath(added.path).name not in LOCK_FILE_NAMES:
+            for kind in personal_data_kinds(added.text):
+                personal.append({"kind": kind, **location})
         for number in matching_terms(added.text, denylist or []):
             terms.append({"kind": "term_in_content", "term": number, **location})
     for commit, message in commit_messages(root):
@@ -274,9 +309,23 @@ def head_paths(root: Path) -> list[str]:
     return git(root, "ls-tree", "-r", "--name-only", "HEAD").splitlines()
 
 
-def uses_environment_variables(root: Path) -> bool:
+def reads_env_file(root: Path) -> bool:
+    """Return whether code outside the tests at HEAD shows signs of reading a .env file."""
     completed = subprocess.run(
-        ["git", "-C", str(root), "grep", "-I", "-q", "-E", ENV_USAGE, "HEAD", "--"],
+        [
+            "git",
+            "-C",
+            str(root),
+            "grep",
+            "-I",
+            "-q",
+            "-E",
+            ENV_FILE_USAGE,
+            "HEAD",
+            "--",
+            ".",
+            *TEST_PATHSPECS,
+        ],
         capture_output=True,
         check=False,
     )
@@ -300,11 +349,12 @@ def gitignore_ignores_env(root: Path, paths: list[str]) -> bool:
 
 
 def check_env_files(root: Path) -> Check:
-    """Check that a repository that reads environment variables ignores .env and has an example."""
+    """Check that a project that reads a .env file ignores it and commits an example."""
     paths = head_paths(root)
-    has_example = any(PurePosixPath(path).name in ENV_EXAMPLE_NAMES for path in paths)
-    if not has_example and not uses_environment_variables(root):
-        return result("env_files", "not_applicable", "the code does not read environment variables")
+    names = {PurePosixPath(path).name for path in paths}
+    has_example = bool(names & ENV_EXAMPLE_NAMES)
+    if not has_example and not names & WRANGLER_CONFIG_NAMES and not reads_env_file(root):
+        return result("env_files", "not_applicable", "the code does not read a .env file")
     findings: list[Finding] = []
     if not gitignore_ignores_env(root, paths):
         findings.append({"kind": "env_not_ignored", "path": ".gitignore"})
