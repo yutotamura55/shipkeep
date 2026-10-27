@@ -97,6 +97,9 @@ State these limits in the report when they matter:
 
 - Secret detection uses built-in patterns for common key formats. It does not
   find every kind of secret, such as passwords in custom formats.
+- `env_files` notices a `.env` file only when the code loads it explicitly
+  (for example with `dotenv`) or an example file exists. Frameworks that load
+  `.env` on their own, such as Vite, Next.js, and Nuxt, are not detected.
 - Merge commits are not searched separately; their changes are searched in the
   commits they merge.
 - The scan does not see uncommitted files, stashes, remotes other than

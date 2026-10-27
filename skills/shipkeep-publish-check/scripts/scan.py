@@ -121,13 +121,13 @@ GITHUB_REMOTE = re.compile(
     r"([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+?)(?:\.git)?/?$"
 )
 
-# Code and configuration that read a .env file. The patterns match the call or
+# Code and configuration that load a .env file. The patterns match the call or
 # the key, not the bare word, so that text that only mentions dotenv does not
-# count. Plain os.environ is left out: it also passes the environment to
-# child processes.
+# count. Reading os.environ or process.env is left out: it also reads variables
+# set by the shell or CI, so it does not show that a .env file exists.
 ENV_FILE_USAGE = (
     r"load_dotenv\(|dotenv_values\(|require\(['\"]dotenv['\"]\)|['\"]dotenv/config['\"]"
-    r"|from ['\"]dotenv['\"]|^\s*env_file\s*[:=]|process\.env\.|import\.meta\.env\."
+    r"|from ['\"]dotenv['\"]|^\s*env_file\s*[:=]"
 )
 DOTENV_EXAMPLE_NAMES = {".env.example", ".env.sample", ".env.template", ".env.dist"}
 # Cloudflare Workers projects keep local secrets in .dev.vars.

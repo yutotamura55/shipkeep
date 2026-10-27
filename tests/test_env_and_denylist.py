@@ -59,7 +59,7 @@ def test_env_files_accept_a_wildcard_pattern_and_a_sample_file(tmp_path: Path) -
 
 def test_env_files_fail_without_an_ignore_rule_and_an_example(tmp_path: Path) -> None:
     repo = GitRepo(tmp_path)
-    repo.commit({"src/app.ts": "const key = process.env.KEY\n", ".gitignore": "node_modules/\n"})
+    repo.commit({"src/app.js": "require('dotenv').config()\n", ".gitignore": "node_modules/\n"})
 
     found = check(scan.scan(tmp_path), "env_files")
 
@@ -184,3 +184,16 @@ def test_env_files_apply_to_code_that_imports_dotenv_config(tmp_path: Path) -> N
     repo.commit({"src/index.js": "import 'dotenv/config'\n"})
 
     assert check(scan.scan(tmp_path), "env_files")["status"] == "fail"
+
+
+def test_env_files_ignore_a_script_that_only_sets_process_env(tmp_path: Path) -> None:
+    # Reading or setting process.env does not mean the project keeps a .env file.
+    repo = GitRepo(tmp_path)
+    repo.commit(
+        {
+            "scripts/e2e.mjs": "process.env.BROWSERS_PATH ??= '0'\n",
+            "src/app.ts": "const key = import.meta.env.VITE_KEY\n",
+        }
+    )
+
+    assert check(scan.scan(tmp_path), "env_files")["status"] == "not_applicable"
