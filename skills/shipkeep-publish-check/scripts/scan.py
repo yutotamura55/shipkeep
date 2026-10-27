@@ -1,17 +1,19 @@
 """Scan a Git repository for problems to fix before making it public.
 
-The scan only reads the repository. It looks at what is committed (HEAD and
-the history of every branch), because that is what a push publishes. It prints
-one JSON document to standard output, so that an agent can turn each check
-into a report row.
+The scan only reads the repository. It looks at what a push publishes: the
+local branches and tags, and the branches of the origin remote, which become
+public too when a repository on GitHub is made public. It prints one JSON
+document to standard output, so that an agent can turn each check into a
+report row.
 
-The output never contains the value of a secret or of personal data, and never
-contains local paths: findings give the kind and the location only.
+The output never contains the value of a secret, personal data, a denylist
+term, or a local path: findings give the kind and the location only.
 """
 
 from __future__ import annotations
 
 import argparse
+import ast
 import fnmatch
 import json
 import re
@@ -26,6 +28,22 @@ SCHEMA_VERSION = 1
 
 Check = dict[str, Any]
 Finding = dict[str, Any]
+
+# Settings that would change the output this script parses. They are fixed on
+# every Git command, so that the user's configuration cannot hide a finding.
+GIT_SETTINGS = (
+    "core.quotePath=false",
+    "color.ui=never",
+    "diff.noprefix=false",
+    "diff.mnemonicPrefix=false",
+    "diff.relative=false",
+    "log.showRoot=true",
+    "log.showSignature=false",
+)
+# What a push publishes, and what becomes public when an existing GitHub
+# repository is made public. Stashes and other remotes are left out.
+PUBLISHED_REFS = ("--branches", "--tags", "--remotes=origin")
+PUBLISHED_REF_PREFIXES = ("refs/heads", "refs/tags", "refs/remotes/origin")
 
 LICENSE_NAMES = {"license", "license.md", "license.txt", "licence", "licence.md", "copying"}
 README_NAMES = {"readme", "readme.md", "readme.rst", "readme.txt"}
@@ -44,10 +62,34 @@ EMAIL = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-
 # Documentation domains reserved by RFC 2606. Only the exact domains are public;
 # a subdomain such as mail.example.net is still reported.
 EXAMPLE_DOMAINS = {"example.com", "example.org", "example.net"}
+# Asset names such as logo@2x.png look like addresses.
+FILE_EXTENSIONS = {
+    "png",
+    "jpg",
+    "jpeg",
+    "gif",
+    "svg",
+    "webp",
+    "avif",
+    "ico",
+    "bmp",
+    "tif",
+    "tiff",
+    "pdf",
+    "css",
+    "js",
+    "mp4",
+    "webm",
+    "woff",
+    "woff2",
+    "ttf",
+    "otf",
+}
+USER_NAME = r"([A-Za-z0-9_.-]+)(?![A-Za-z0-9_.-])"
 HOME_PATHS = (
-    re.compile(r"/home/([A-Za-z_][A-Za-z0-9_.-]*)/"),
-    re.compile(r"/Users/([A-Za-z0-9_.-]+)/"),
-    re.compile(r"[A-Za-z]:\\+Users\\+([A-Za-z0-9_.-]+)"),
+    re.compile(r"/home/" + USER_NAME),
+    re.compile(r"/Users/" + USER_NAME),
+    re.compile(r"[A-Za-z]:\\+Users\\+" + USER_NAME),
 )
 # User names that appear in documentation and CI rather than on a real machine.
 GENERIC_USER_NAMES = {"user", "username", "runner", "ubuntu", "app", "node", "vscode", "shared"}
@@ -87,8 +129,10 @@ ENV_FILE_USAGE = (
     r"load_dotenv\(|dotenv_values\(|require\(['\"]dotenv['\"]\)|['\"]dotenv/config['\"]"
     r"|from ['\"]dotenv['\"]|^\s*env_file\s*[:=]|process\.env\.|import\.meta\.env\."
 )
+DOTENV_EXAMPLE_NAMES = {".env.example", ".env.sample", ".env.template", ".env.dist"}
 # Cloudflare Workers projects keep local secrets in .dev.vars.
 WRANGLER_CONFIG_NAMES = {"wrangler.toml", "wrangler.json", "wrangler.jsonc"}
+WRANGLER_EXAMPLE_NAMES = {".dev.vars.example"}
 TEST_PATHSPECS = (
     ":(exclude,glob)**/tests/**",
     ":(exclude,glob)**/test/**",
@@ -97,19 +141,21 @@ TEST_PATHSPECS = (
     ":(exclude,glob)**/*.test.*",
     ":(exclude,glob)**/*.spec.*",
 )
-ENV_EXAMPLE_NAMES = {
-    ".env.example",
-    ".env.sample",
-    ".env.template",
-    ".env.dist",
-    ".dev.vars.example",
-}
+
+HIDDEN_PATH = "(hidden: the path contains a denylist term)"
+
+
+def git_command(root: Path, *args: str) -> list[str]:
+    command = ["git", "-C", str(root)]
+    for setting in GIT_SETTINGS:
+        command += ["-c", setting]
+    return [*command, *args]
 
 
 def git(root: Path, *args: str) -> str:
     """Run a read-only Git command in ``root`` and return its standard output."""
     completed = subprocess.run(
-        ["git", "-C", str(root), "-c", "core.quotePath=false", *args],
+        git_command(root, *args),
         capture_output=True,
         encoding="utf-8",
         errors="replace",
@@ -118,19 +164,35 @@ def git(root: Path, *args: str) -> str:
     return completed.stdout
 
 
-def has_commits(root: Path) -> bool:
-    completed = subprocess.run(
-        ["git", "-C", str(root), "rev-parse", "--verify", "--quiet", "HEAD"],
-        capture_output=True,
-        check=False,
-    )
+def git_succeeds(root: Path, *args: str) -> bool:
+    completed = subprocess.run(git_command(root, *args), capture_output=True, check=False)
     return completed.returncode == 0
+
+
+def repository_root(path: Path) -> Path:
+    """Return the top of the work tree that contains ``path``, or ``path`` for a bare one."""
+    if git(path, "rev-parse", "--is-bare-repository").strip() == "true":
+        return path
+    return Path(git(path, "rev-parse", "--show-toplevel").strip())
+
+
+def has_commits(root: Path) -> bool:
+    return git_succeeds(root, "rev-parse", "--verify", "--quiet", "HEAD")
 
 
 def result(
     check_id: str, status: str, summary: str, findings: list[Finding] | None = None
 ) -> Check:
     return {"id": check_id, "status": status, "summary": summary, "findings": findings or []}
+
+
+def unquote_path(text: str) -> str:
+    """Undo the C-style quoting Git applies to unusual file names."""
+    if text.startswith('"') and text.endswith('"'):
+        unquoted = ast.literal_eval(text)
+        if isinstance(unquoted, str):
+            return unquoted
+    return text
 
 
 @dataclass(frozen=True)
@@ -142,42 +204,73 @@ class AddedLine:
 
 
 def added_lines(root: Path) -> Iterator[AddedLine]:
-    """Yield every line that any commit on any branch added, with its location."""
+    """Yield every line that a published commit added, with its location."""
     log = git(
         root,
         "log",
-        "--all",
+        *PUBLISHED_REFS,
         "--patch",
         "--unified=0",
         "--no-color",
         "--no-ext-diff",
         "--no-renames",
+        "--src-prefix=a/",
+        "--dst-prefix=b/",
         "--format=%x00commit %H",
     )
     commit = ""
     path: str | None = None
+    in_header = False
     line = 0
     for text in log.splitlines():
         if text.startswith("\0commit "):
             commit = text.removeprefix("\0commit ")[:12]
-            path = None
-        elif text.startswith("+++ "):
-            path = text.removeprefix("+++ b/") if text.startswith("+++ b/") else None
+            path, in_header = None, False
+        elif text.startswith("diff --git "):
+            path, in_header = None, True
+        elif in_header and text.startswith("+++ "):
+            # Git ends the name with a tab when it contains a space.
+            name = unquote_path(text.removeprefix("+++ ").rstrip("\t"))
+            path = name.removeprefix("b/") if name.startswith("b/") else None
         elif text.startswith("@@ "):
+            in_header = False
             match = re.search(r"\+(\d+)", text)
             line = int(match.group(1)) if match else 0
-        elif text.startswith("+") and path is not None:
+        elif not in_header and text.startswith("+") and path is not None:
             yield AddedLine(commit, path, line, text[1:])
             line += 1
 
 
+def added_files(root: Path) -> Iterator[tuple[str, str]]:
+    """Yield the abbreviated hash and path of every file that a published commit added."""
+    log = git(
+        root,
+        "log",
+        *PUBLISHED_REFS,
+        "--diff-filter=A",
+        "--name-only",
+        "--no-renames",
+        "--format=%x00%H",
+    )
+    commit = ""
+    for line in log.splitlines():
+        if line.startswith("\0"):
+            commit = line[1:13]
+        elif line:
+            yield commit, unquote_path(line)
+
+
 def commit_messages(root: Path) -> Iterator[tuple[str, str]]:
-    """Yield the abbreviated hash and the full message of every commit on any branch."""
-    log = git(root, "log", "--all", "--format=%H%x00%B%x01")
+    """Yield the abbreviated hash and the full message of every published commit."""
+    log = git(root, "log", *PUBLISHED_REFS, "--format=%H%x00%B%x01")
     for entry in log.split("\x01"):
         commit, _, message = entry.strip("\n").partition("\0")
         if commit:
             yield commit[:12], message
+
+
+def published_ref_names(root: Path) -> list[str]:
+    return git(root, "for-each-ref", "--format=%(refname)", *PUBLISHED_REF_PREFIXES).splitlines()
 
 
 def is_noreply_address(address: str) -> bool:
@@ -186,7 +279,7 @@ def is_noreply_address(address: str) -> bool:
 
 
 def is_public_address(address: str) -> bool:
-    """Return whether an address in content is safe to publish."""
+    """Return whether an address-like string in content is safe to publish."""
     local, _, domain = address.lower().rpartition("@")
     return (
         is_noreply_address(address)
@@ -194,6 +287,7 @@ def is_public_address(address: str) -> bool:
         or "no-reply" in local
         or local == "git"
         or domain in EXAMPLE_DOMAINS
+        or domain.rsplit(".", 1)[-1] in FILE_EXTENSIONS
     )
 
 
@@ -225,10 +319,16 @@ def sensitive_file_kind(path: str) -> str | None:
     return None
 
 
+def matching_terms(text: str, denylist: list[str]) -> list[int]:
+    """Return the 1-based numbers of the denylist terms that appear in ``text``."""
+    lowered = text.lower()
+    return [number for number, term in enumerate(denylist, 1) if term.lower() in lowered]
+
+
 def check_commit_identity(root: Path) -> Check:
     """Find commits whose author or committer address is not a GitHub noreply address."""
     findings = []
-    log = git(root, "log", "--all", "--format=%H%x00%ae%x00%ce")
+    log = git(root, "log", *PUBLISHED_REFS, "--format=%H%x00%ae%x00%ce")
     for line in log.splitlines():
         commit, author, committer = line.split("\0")
         for kind, address in (("author_email", author), ("committer_email", committer)):
@@ -245,14 +345,9 @@ def check_commit_identity(root: Path) -> Check:
     return result("commit_identity", "pass", "every commit uses a GitHub noreply address")
 
 
-def matching_terms(text: str, denylist: list[str]) -> list[int]:
-    """Return the 1-based numbers of the denylist terms that appear in ``text``."""
-    lowered = text.lower()
-    return [number for number, term in enumerate(denylist, 1) if term.lower() in lowered]
-
-
 def check_history_content(root: Path, denylist: list[str] | None) -> list[Check]:
-    """Search added lines and commit messages for secrets, personal data, and denylist terms."""
+    """Search added lines, file names, messages, and refs for secrets, personal data, and terms."""
+    terms_to_find = denylist or []
     secrets: list[Finding] = []
     personal: list[Finding] = []
     terms: list[Finding] = []
@@ -264,13 +359,19 @@ def check_history_content(root: Path, denylist: list[str] | None) -> list[Check]
         if PurePosixPath(added.path).name not in LOCK_FILE_NAMES:
             for kind in personal_data_kinds(added.text):
                 personal.append({"kind": kind, **location})
-        for number in matching_terms(added.text, denylist or []):
+        for number in matching_terms(added.text, terms_to_find):
             terms.append({"kind": "term_in_content", "term": number, **location})
+    for commit, path in added_files(root):
+        for number in matching_terms(path, terms_to_find):
+            terms.append({"kind": "term_in_path", "term": number, "commit": commit})
     for commit, message in commit_messages(root):
         if any(not is_public_address(address) for address in EMAIL.findall(message)):
             personal.append({"kind": "email_in_commit_message", "commit": commit})
-        for number in matching_terms(message, denylist or []):
+        for number in matching_terms(message, terms_to_find):
             terms.append({"kind": "term_in_commit_message", "term": number, "commit": commit})
+    for ref in published_ref_names(root):
+        for number in matching_terms(ref, terms_to_find):
+            terms.append({"kind": "term_in_ref", "term": number})
 
     if secrets:
         secrets_check = result(
@@ -305,80 +406,13 @@ def check_history_content(root: Path, denylist: list[str] | None) -> list[Check]
     return [secrets_check, personal_check, terms_check]
 
 
-def head_paths(root: Path) -> list[str]:
-    return git(root, "ls-tree", "-r", "--name-only", "HEAD").splitlines()
-
-
-def reads_env_file(root: Path) -> bool:
-    """Return whether code outside the tests at HEAD shows signs of reading a .env file."""
-    completed = subprocess.run(
-        [
-            "git",
-            "-C",
-            str(root),
-            "grep",
-            "-I",
-            "-q",
-            "-E",
-            ENV_FILE_USAGE,
-            "HEAD",
-            "--",
-            ".",
-            *TEST_PATHSPECS,
-        ],
-        capture_output=True,
-        check=False,
-    )
-    return completed.returncode == 0
-
-
-def gitignore_ignores_env(root: Path, paths: list[str]) -> bool:
-    """Return whether the top-level .gitignore at HEAD ignores a file named .env."""
-    if ".gitignore" not in paths:
-        return False
-    ignored = False
-    for raw in git(root, "show", "HEAD:.gitignore").splitlines():
-        pattern = raw.strip()
-        if not pattern or pattern.startswith("#"):
-            continue
-        negated = pattern.startswith("!")
-        pattern = pattern.removeprefix("!").lstrip("/").rstrip("/")
-        if fnmatch.fnmatchcase(".env", pattern):
-            ignored = not negated
-    return ignored
-
-
-def check_env_files(root: Path) -> Check:
-    """Check that a project that reads a .env file ignores it and commits an example."""
-    paths = head_paths(root)
-    names = {PurePosixPath(path).name for path in paths}
-    has_example = bool(names & ENV_EXAMPLE_NAMES)
-    if not has_example and not names & WRANGLER_CONFIG_NAMES and not reads_env_file(root):
-        return result("env_files", "not_applicable", "the code does not read a .env file")
-    findings: list[Finding] = []
-    if not gitignore_ignores_env(root, paths):
-        findings.append({"kind": "env_not_ignored", "path": ".gitignore"})
-    if not has_example:
-        findings.append({"kind": "env_example_missing"})
-    if findings:
-        return result(
-            "env_files", "fail", "environment files are not set up for publishing", findings
-        )
-    return result("env_files", "pass", ".env is ignored and an example file is committed")
-
-
 def check_sensitive_files(root: Path) -> Check:
     """Find files that should never be committed, in every commit that added one."""
-    findings = []
-    commit = ""
-    log = git(
-        root, "log", "--all", "--diff-filter=A", "--name-only", "--no-renames", "--format=%x00%H"
-    )
-    for line in log.splitlines():
-        if line.startswith("\0"):
-            commit = line[1:13]
-        elif line and (kind := sensitive_file_kind(line)):
-            findings.append({"kind": kind, "commit": commit, "path": line})
+    findings = [
+        {"kind": kind, "commit": commit, "path": path}
+        for commit, path in added_files(root)
+        if (kind := sensitive_file_kind(path))
+    ]
     if findings:
         return result(
             "sensitive_files",
@@ -389,20 +423,73 @@ def check_sensitive_files(root: Path) -> Check:
     return result("sensitive_files", "pass", "no file that should not be published was committed")
 
 
-def top_level_files(root: Path) -> list[str]:
-    """Return the names of the files at the top level of the HEAD commit."""
-    return git(root, "ls-tree", "--name-only", "HEAD").splitlines()
+def tree_paths(root: Path, *options: str) -> list[str]:
+    """Return the paths in the HEAD commit, from the top of the repository."""
+    listing = git(root, "ls-tree", *options, "--full-tree", "--name-only", "HEAD")
+    return [unquote_path(path) for path in listing.splitlines()]
+
+
+def reads_env_file(root: Path) -> bool:
+    """Return whether code outside the tests at HEAD shows signs of reading a .env file."""
+    return git_succeeds(
+        root, "grep", "-I", "-q", "-E", ENV_FILE_USAGE, "HEAD", "--", ":(top)", *TEST_PATHSPECS
+    )
+
+
+def gitignore_ignores(root: Path, paths: list[str], name: str) -> bool:
+    """Return whether the top-level .gitignore at HEAD ignores a top-level file ``name``."""
+    if ".gitignore" not in paths:
+        return False
+    ignored = False
+    for raw in git(root, "show", "HEAD:.gitignore").splitlines():
+        pattern = raw.strip()
+        if not pattern or pattern.startswith("#"):
+            continue
+        negated = pattern.startswith("!")
+        pattern = pattern.removeprefix("!")
+        if pattern.endswith("/"):
+            continue  # matches directories only
+        pattern = pattern.removeprefix("**/").removeprefix("/")
+        if "/" in pattern:
+            continue  # anchored below the top level
+        if fnmatch.fnmatchcase(name, pattern):
+            ignored = not negated
+    return ignored
+
+
+def check_env_files(root: Path) -> Check:
+    """Check that a project that keeps secrets in a local file ignores it and commits an example."""
+    paths = tree_paths(root, "-r")
+    names = {PurePosixPath(path).name for path in paths}
+    required = []
+    if names & DOTENV_EXAMPLE_NAMES or reads_env_file(root):
+        required.append((".env", DOTENV_EXAMPLE_NAMES))
+    if names & (WRANGLER_CONFIG_NAMES | WRANGLER_EXAMPLE_NAMES):
+        required.append((".dev.vars", WRANGLER_EXAMPLE_NAMES))
+    if not required:
+        return result("env_files", "not_applicable", "the project does not read a local env file")
+    findings: list[Finding] = []
+    for file, examples in required:
+        if not gitignore_ignores(root, paths, file):
+            findings.append({"kind": "env_not_ignored", "path": ".gitignore", "file": file})
+        if not names & examples:
+            findings.append({"kind": "env_example_missing", "file": file})
+    if findings:
+        return result(
+            "env_files", "fail", "local env files are not set up for publishing", findings
+        )
+    return result("env_files", "pass", "local env files are ignored and examples are committed")
 
 
 def check_license(root: Path) -> Check:
-    names = [name for name in top_level_files(root) if name.lower() in LICENSE_NAMES]
+    names = [name for name in tree_paths(root) if name.lower() in LICENSE_NAMES]
     if names:
         return result("license", "pass", f"HEAD has a license file: {names[0]}")
     return result("license", "fail", "HEAD has no license file at the top level")
 
 
 def check_readme(root: Path) -> Check:
-    names = [name for name in top_level_files(root) if name.lower() in README_NAMES]
+    names = [name for name in tree_paths(root) if name.lower() in README_NAMES]
     for name in names:
         if git(root, "show", f"HEAD:{name}").strip():
             return result("readme", "pass", f"HEAD has a README: {name}")
@@ -414,7 +501,7 @@ def check_readme(root: Path) -> Check:
 def github_repository(root: Path) -> str | None:
     """Return "owner/name" of the origin remote when it is on GitHub."""
     completed = subprocess.run(
-        ["git", "-C", str(root), "config", "--get", "remote.origin.url"],
+        git_command(root, "config", "--get", "remote.origin.url"),
         capture_output=True,
         text=True,
         check=False,
@@ -477,6 +564,15 @@ def check_github_settings(
     return result("github_settings", "pass", "secret scanning and push protection are on")
 
 
+def hide_paths_with_terms(checks: list[Check], denylist: list[str]) -> None:
+    """Replace every finding path that contains a denylist term, so the output never shows one."""
+    for check in checks:
+        for finding in check["findings"]:
+            path = finding.get("path")
+            if isinstance(path, str) and matching_terms(path, denylist):
+                finding["path"] = HIDDEN_PATH
+
+
 CHECK_IDS = (
     "commit_identity",
     "history_secrets",
@@ -490,11 +586,12 @@ CHECK_IDS = (
 
 
 def scan(root: Path, denylist: list[str] | None = None) -> dict[str, Any]:
-    """Return the scan result for the repository at ``root``.
+    """Return the scan result for the repository that contains ``root``.
 
     ``denylist`` holds terms that must not appear in the history; findings refer
     to a term by its 1-based position in the list, never by its text.
     """
+    root = repository_root(root)
     if not has_commits(root):
         checks = [
             result(check_id, "unknown", "the repository has no commits") for check_id in CHECK_IDS
@@ -509,6 +606,7 @@ def scan(root: Path, denylist: list[str] | None = None) -> dict[str, Any]:
             check_readme(root),
         ]
     checks.append(check_github_settings(root))
+    hide_paths_with_terms(checks, denylist or [])
     counts = {
         status: sum(1 for check in checks if check["status"] == status)
         for status in ("pass", "fail", "unknown", "not_applicable")
@@ -521,12 +619,17 @@ def is_git_repository(path: Path) -> bool:
 
     Raises ``OSError`` when Git cannot be started.
     """
-    completed = subprocess.run(
-        ["git", "-C", str(path), "rev-parse", "--git-dir"],
-        capture_output=True,
-        check=False,
-    )
-    return completed.returncode == 0
+    return git_succeeds(path, "rev-parse", "--git-dir")
+
+
+def read_denylist(path: Path) -> list[str]:
+    """Read one term per line; blank lines and lines starting with '#' are skipped.
+
+    Raises ``OSError`` when the file cannot be read, and ``UnicodeDecodeError``
+    when it is not UTF-8 text.
+    """
+    lines = path.read_text(encoding="utf-8-sig").splitlines()
+    return [term.strip() for term in lines if term.strip() and not term.strip().startswith("#")]
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -538,25 +641,32 @@ def main(argv: list[str] | None = None) -> int:
         help="file with one term per line that must not appear in the history",
     )
     args = parser.parse_args(argv)
+    # Error messages are fixed text: exception messages can contain local paths.
     denylist = None
     if args.denylist is not None:
         try:
-            lines = args.denylist.read_text(encoding="utf-8").splitlines()
+            denylist = read_denylist(args.denylist)
+        except UnicodeDecodeError:
+            print("the denylist file must be UTF-8 text", file=sys.stderr)
+            return 2
         except OSError:
             print("cannot read the denylist file", file=sys.stderr)
             return 2
-        denylist = [t.strip() for t in lines if t.strip() and not t.strip().startswith("#")]
     root: Path = args.root
     try:
         is_repository = root.is_dir() and is_git_repository(root)
     except OSError:
-        # The exception message can contain local paths, so it is not printed.
         print("cannot run git: install Git and make sure it is on PATH", file=sys.stderr)
         return 2
     if not is_repository:
         print("not a Git repository: the given path", file=sys.stderr)
         return 2
-    json.dump(scan(root, denylist), sys.stdout, indent=2)
+    try:
+        output = scan(root, denylist)
+    except subprocess.CalledProcessError:
+        print("git failed while reading the repository", file=sys.stderr)
+        return 2
+    json.dump(output, sys.stdout, indent=2)
     sys.stdout.write("\n")
     return 0
 

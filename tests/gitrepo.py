@@ -14,6 +14,7 @@ class GitRepo:
 
     def __init__(self, path: Path) -> None:
         self.path = path
+        path.mkdir(parents=True, exist_ok=True)
         self.git("init", "--quiet", "--initial-branch=main")
 
     def git(self, *args: str, email: str = NOREPLY_EMAIL) -> str:
