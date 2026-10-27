@@ -17,7 +17,7 @@ import json
 import re
 import subprocess
 import sys
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -56,6 +56,11 @@ ENV_EXAMPLE_SUFFIXES = (".example", ".sample", ".template", ".dist")
 PRIVATE_KEY_FILE_NAMES = {"id_rsa", "id_dsa", "id_ecdsa", "id_ed25519"}
 PRIVATE_KEY_FILE_SUFFIXES = (".pem", ".key", ".p12", ".pfx", ".jks", ".keystore")
 CREDENTIAL_FILE_NAMES = {"credentials.json", ".netrc", ".pypirc"}
+
+GITHUB_REMOTE = re.compile(
+    r"^(?:https://github\.com/|git@github\.com:|ssh://git@github\.com/)"
+    r"([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+?)(?:\.git)?/?$"
+)
 
 ENV_USAGE = r"process\.env|import\.meta\.env|os\.environ|os\.getenv|\bgetenv\("
 ENV_EXAMPLE_NAMES = {
@@ -356,6 +361,72 @@ def check_readme(root: Path) -> Check:
     return result("readme", "fail", "HEAD has no README at the top level")
 
 
+def github_repository(root: Path) -> str | None:
+    """Return "owner/name" of the origin remote when it is on GitHub."""
+    completed = subprocess.run(
+        ["git", "-C", str(root), "config", "--get", "remote.origin.url"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    match = GITHUB_REMOTE.match(completed.stdout.strip())
+    return match.group(1) if match else None
+
+
+def fetch_security_settings(repository: str) -> dict[str, Any] | None:
+    """Read the security settings of a GitHub repository with the gh CLI.
+
+    Returns None when gh is missing, not signed in, or cannot see the repository.
+    The error output of gh is discarded because it can contain local details.
+    """
+    try:
+        completed = subprocess.run(
+            ["gh", "api", f"repos/{repository}"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError:
+        return None
+    if completed.returncode != 0:
+        return None
+    try:
+        data = json.loads(completed.stdout)
+    except json.JSONDecodeError:
+        return None
+    settings = data.get("security_and_analysis") if isinstance(data, dict) else None
+    return settings if isinstance(settings, dict) else {}
+
+
+def check_github_settings(
+    root: Path,
+    fetch: Callable[[str], dict[str, Any] | None] = fetch_security_settings,
+) -> Check:
+    """Check that GitHub secret scanning and push protection are on for the origin remote."""
+    repository = github_repository(root)
+    if repository is None:
+        return result("github_settings", "not_applicable", "the origin remote is not on GitHub")
+    settings = fetch(repository)
+    if settings is None:
+        return result("github_settings", "unknown", "the settings could not be read with gh")
+    features = (
+        ("secret_scanning", "secret_scanning_disabled"),
+        ("secret_scanning_push_protection", "push_protection_disabled"),
+    )
+    if any(not isinstance(settings.get(name), dict) for name, _ in features):
+        return result(
+            "github_settings", "unknown", "GitHub does not show the secret scanning settings"
+        )
+    findings: list[Finding] = [
+        {"kind": kind} for name, kind in features if settings[name].get("status") != "enabled"
+    ]
+    if findings:
+        return result(
+            "github_settings", "fail", "secret scanning or push protection is off", findings
+        )
+    return result("github_settings", "pass", "secret scanning and push protection are on")
+
+
 CHECK_IDS = (
     "commit_identity",
     "history_secrets",
@@ -387,6 +458,7 @@ def scan(root: Path, denylist: list[str] | None = None) -> dict[str, Any]:
             check_license(root),
             check_readme(root),
         ]
+    checks.append(check_github_settings(root))
     return {"schema": SCHEMA_VERSION, "checks": checks}
 
 
