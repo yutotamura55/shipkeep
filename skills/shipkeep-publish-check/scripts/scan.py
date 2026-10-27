@@ -66,6 +66,14 @@ SECRET_PATTERNS = {
 # Long runs of key-like characters are masked in context lines even when no
 # pattern names them, because they may be secrets of an unknown format.
 KEY_LIKE = re.compile(r"[A-Za-z0-9+/_-]{20,}")
+# A whole local path, so that directory names after the user name stay hidden.
+LOCAL_PATH = re.compile(
+    r"(?:/home/|/Users/)[A-Za-z0-9_.-]+(?:/[^\s'\"`)\]>]*)?"
+    r"|[A-Za-z]:\\+Users\\+[A-Za-z0-9_.-]+(?:\\[^\s'\"`)\]>]*)?"
+)
+# Values after "=" or ":" and inside quotes may be passwords of any length.
+ASSIGNED_VALUE = re.compile(r"([=:]\s*)(?!<)([^\s'\",;<>]+)")
+QUOTED = re.compile(r"(['\"])(?!<[^<>]*>\1)[^'\"]*\1")
 CONTEXT_LENGTH = 200
 
 EMAIL = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}")
@@ -184,6 +192,21 @@ ENV_FILE_USAGE = (
     r"|from ['\"]dotenv['\"]|^\s*env_file\s*[:=]"
 )
 DOTENV_EXAMPLE_NAMES = {".env.example", ".env.sample", ".env.template", ".env.dist"}
+# Files that mark the top of a project, where it keeps its .env file.
+PROJECT_MARKERS = (
+    "package.json",
+    "pyproject.toml",
+    "requirements.txt",
+    "setup.py",
+    "compose.yaml",
+    "compose.yml",
+    "docker-compose.yml",
+    "docker-compose.yaml",
+    "go.mod",
+    "Cargo.toml",
+    "composer.json",
+    "Gemfile",
+)
 # Cloudflare Workers projects keep local secrets in .dev.vars.
 WRANGLER_CONFIG_NAMES = {"wrangler.toml", "wrangler.json", "wrangler.jsonc"}
 WRANGLER_EXAMPLE_NAMES = {".dev.vars.example"}
@@ -283,9 +306,10 @@ def added_lines(root: Path) -> Iterator[AddedLine]:
     in_header = False
     parents = 1
     line = 0
-    for text in log.splitlines():
-        if text.startswith("\0commit "):
-            commit = text.removeprefix("\0commit ")[:12]
+    # Split on LF only: with --text, file content can hold other line breaks.
+    for text in log.split("\n"):
+        if text.startswith("\0commit ") and COMMIT_HASH.fullmatch(text[8:]):
+            commit = text[8:20]
             path, in_header = None, False
         elif text.startswith(("diff --git ", "diff --cc ", "diff --combined ")):
             path, in_header = None, True
@@ -393,10 +417,11 @@ def masked(text: str, denylist: list[str]) -> str:
     text = EMAIL.sub(
         lambda m: m.group(0) if is_public_address(m.group(0)) else "<email_address>", text
     )
-    for pattern in HOME_PATHS:
-        text = pattern.sub(lambda m: f"{m.group(1)}<user>", text)
+    text = LOCAL_PATH.sub("<local_path>", text)
     for number, term in enumerate(denylist, 1):
         text = re.sub(re.escape(term), f"<term {number}>", text, flags=re.IGNORECASE)
+    text = ASSIGNED_VALUE.sub(lambda m: f"{m.group(1)}<redacted>", text)
+    text = QUOTED.sub(lambda m: f"{m.group(1)}<redacted>{m.group(1)}", text)
     text = KEY_LIKE.sub("<redacted>", text)
     text = text.strip()
     return text if len(text) <= CONTEXT_LENGTH else text[:CONTEXT_LENGTH] + "..."
@@ -425,7 +450,10 @@ def check_history_coverage(root: Path) -> Check:
     if git(root, "rev-parse", "--is-shallow-repository").strip() == "true":
         findings.append({"kind": "shallow_clone"})
     fetch_specs = git(root, "config", "--get-all", "remote.origin.fetch", check=False).split()
-    if fetch_specs and not any(spec.lstrip("+") == ORIGIN_FETCH_ALL for spec in fetch_specs):
+    narrowed = any(spec.startswith("^") for spec in fetch_specs)
+    if fetch_specs and (
+        narrowed or not any(spec.lstrip("+") == ORIGIN_FETCH_ALL for spec in fetch_specs)
+    ):
         findings.append({"kind": "partial_fetch"})
     if findings:
         return result(
@@ -561,13 +589,23 @@ def tree_paths(root: Path, *options: str) -> list[str]:
     return [unquote_path(path) for path in listing.splitlines()]
 
 
-def reads_env_file(root: Path) -> bool:
-    """Return whether code outside the tests at HEAD shows signs of loading a .env file."""
-    return git_succeeds(
+def project_directory(path: str, paths: set[str]) -> str:
+    """Return the nearest directory above ``path`` that holds a project file, or the top."""
+    directory = PurePosixPath(path).parent
+    while str(directory) != ".":
+        if any(f"{directory}/{marker}" in paths for marker in PROJECT_MARKERS):
+            return f"{directory}/"
+        directory = directory.parent
+    return ""
+
+
+def env_file_users(root: Path, paths: set[str]) -> set[str]:
+    """Return the project directories whose code (outside tests) loads a .env file."""
+    listing = git(
         root,
         "grep",
         "-I",
-        "-q",
+        "-l",
         "--no-textconv",
         "-E",
         ENV_FILE_USAGE,
@@ -575,6 +613,22 @@ def reads_env_file(root: Path) -> bool:
         "--",
         ":(top)",
         *TEST_PATHSPECS,
+        check=False,
+    )
+    files = [unquote_path(line.removeprefix("HEAD:")) for line in listing.split("\n") if line]
+    return {project_directory(file, paths) for file in files}
+
+
+def glob_match(pattern: list[str], path: list[str]) -> bool:
+    """Match path segments the way Git does: "*" stays in one segment, "**" spans any."""
+    if not pattern:
+        return not path
+    if pattern[0] == "**":
+        return any(glob_match(pattern[1:], path[skip:]) for skip in range(len(path) + 1))
+    return (
+        bool(path)
+        and fnmatch.fnmatchcase(path[0], pattern[0])
+        and glob_match(pattern[1:], path[1:])
     )
 
 
@@ -592,14 +646,9 @@ def gitignore_matches(pattern: str, relative: str) -> bool | None:
     pattern = pattern.removeprefix("!")
     if pattern.endswith("/"):
         return None  # matches directories only
-    if pattern.startswith("**/"):
-        pattern = pattern.removeprefix("**/")
-        candidate = PurePosixPath(relative).name if "/" not in pattern else relative
-    elif "/" in pattern:
-        pattern, candidate = pattern.removeprefix("/"), relative
-    else:
-        candidate = PurePosixPath(relative).name
-    if not fnmatch.fnmatchcase(candidate, pattern):
+    # A pattern with a slash is relative to the .gitignore; others match at any depth.
+    parts = pattern.removeprefix("/").split("/") if "/" in pattern else ["**", pattern]
+    if not glob_match(parts, relative.split("/")):
         return None
     return not negated
 
@@ -631,8 +680,8 @@ def env_targets(root: Path, paths: list[str]) -> dict[str, set[str]]:
             targets[f"{prefix}.env"] = DOTENV_EXAMPLE_NAMES
         if name in WRANGLER_CONFIG_NAMES | WRANGLER_EXAMPLE_NAMES:
             targets[f"{prefix}.dev.vars"] = WRANGLER_EXAMPLE_NAMES
-    if ".env" not in targets and reads_env_file(root):
-        targets[".env"] = DOTENV_EXAMPLE_NAMES
+    for prefix in env_file_users(root, set(paths)):
+        targets.setdefault(f"{prefix}.env", DOTENV_EXAMPLE_NAMES)
     return targets
 
 

@@ -195,7 +195,7 @@ def test_findings_carry_the_line_with_values_masked(tmp_path: Path) -> None:
     }
     assert contexts == {
         "config.py": "key = '<aws_access_key_id>'",
-        "notes.md": "mail <email_address> from /home/<user>/demo",
+        "notes.md": "mail <email_address> from <local_path>",
         "plan.md": "pitch to <term 1> with token=<redacted>",
     }
 
@@ -207,3 +207,79 @@ def test_argument_errors_do_not_echo_the_arguments(capsys: pytest.CaptureFixture
 
     assert stopped.value.code == 2
     assert "alice" not in capsys.readouterr().err
+
+
+# Second round of the independent review.
+
+
+def contexts_of(result: dict[str, object], check_id: str) -> list[object]:
+    return [f["context"] for f in finding_list(check(result, check_id))]
+
+
+def test_context_masks_values_after_assignments_and_inside_quotes(tmp_path: Path) -> None:
+    repo = GitRepo(tmp_path)
+    repo.commit({"a.env": f"AWS={AWS_KEY_ID} PASSWORD=hunter2 note='short pw'\n"})
+
+    contexts = contexts_of(scan.scan(tmp_path), "history_secrets")
+
+    assert contexts == ["AWS=<aws_access_key_id> PASSWORD=<redacted> note='<redacted>'"]
+
+
+def test_context_masks_the_whole_local_path(tmp_path: Path) -> None:
+    repo = GitRepo(tmp_path)
+    repo.commit({"notes.md": f"open {HOME}/client-x/plan.md now\n"})
+
+    contexts = contexts_of(scan.scan(tmp_path), "history_personal_data")
+
+    assert contexts == ["open <local_path> now"]
+
+
+def test_control_characters_in_content_cannot_forge_commit_records(tmp_path: Path) -> None:
+    repo = GitRepo(tmp_path)
+    repo.commit({"data.txt": f"x\v\0commit {CLIENT_NAME}\n{AWS_KEY_ID}\n"})
+
+    result = scan.scan(tmp_path, denylist=[CLIENT_NAME])
+
+    assert check(result, "history_secrets")["status"] == "fail"
+    assert CLIENT_NAME not in json.dumps(result)
+
+
+def test_a_negative_fetch_refspec_makes_coverage_unknown(tmp_path: Path) -> None:
+    source = GitRepo(tmp_path / "source")
+    source.commit({"a.txt": "a\n"})
+    clone = tmp_path / "clone"
+    subprocess.run(
+        ["git", "clone", "--quiet", f"file://{tmp_path / 'source'}", str(clone)], check=True
+    )
+    subprocess.run(
+        ["git", "-C", str(clone), "config", "--add", "remote.origin.fetch", "^refs/heads/old"],
+        check=True,
+    )
+
+    assert check(scan.scan(clone), "history_coverage")["status"] == "unknown"
+
+
+@pytest.mark.parametrize(
+    ("env_path", "expected"),
+    [("apps/team/.env.example", "pass"), ("apps/team/api/.env.example", "fail")],
+)
+def test_a_single_star_does_not_cross_directories(
+    tmp_path: Path, env_path: str, expected: str
+) -> None:
+    repo = GitRepo(tmp_path)
+    repo.commit({env_path: "KEY=\n", ".gitignore": "apps/*/.env\n"})
+
+    assert check(scan.scan(tmp_path), "env_files")["status"] == expected
+
+
+def test_env_use_in_a_subproject_does_not_require_a_root_env(tmp_path: Path) -> None:
+    repo = GitRepo(tmp_path)
+    repo.commit(
+        {
+            "api/compose.yaml": "services:\n  app:\n    env_file: .env\n",
+            "api/.env.example": "KEY=\n",
+            "api/.gitignore": ".env\n",
+        }
+    )
+
+    assert check(scan.scan(tmp_path), "env_files")["status"] == "pass"

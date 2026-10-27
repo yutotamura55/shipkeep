@@ -114,7 +114,7 @@ def test_personal_data_finds_an_address_and_a_home_path(tmp_path: Path) -> None:
             "commit": commit[:12],
             "path": "notes.md",
             "line": 2,
-            "context": "see /home/<user>/projects/demo",
+            "context": "see <local_path>",
         },
     ]
 
