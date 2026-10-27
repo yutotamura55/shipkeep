@@ -13,7 +13,7 @@
 
 | 場所 | 内容 |
 | --- | --- |
-| `skills/repo-publish-check/` | skill 本体。`SKILL.md` と、検査を行うスクリプト（`scripts/scan.py`）を置く |
+| `skills/repo-publish-check/` | skill 本体。今は検査を行うスクリプト（`scripts/scan.py`）の入口だけがある。`SKILL.md` は #2 で追加する |
 | `tests/` | スクリプトのテスト |
 | `scripts/check.sh` | 書式・lint・型検査・テストをまとめて実行する |
 
@@ -28,7 +28,7 @@ export HOST_UID=$(id -u) HOST_GID=$(id -g)
 docker compose run --rm dev scripts/check.sh
 ```
 
-`HOST_UID` と `HOST_GID` は、コンテナの中で作られたファイル（キャッシュなど）の所有者を、ホストの利用者にそろえるための値です。
+`HOST_UID` と `HOST_GID` は、コンテナの中で作られたファイル（キャッシュなど）の所有者を、ホストの利用者にそろえるための値です。設定していないと、compose はエラーで止まります。
 
 検査が失敗したときに、書式と import の順序を自動で直すには次を実行します。
 

@@ -2,7 +2,7 @@ services:
   dev:
     build: .
     # Run as the host user so that files created in the container stay editable.
-    user: "${HOST_UID:-1000}:${HOST_GID:-1000}"
+    user: "${HOST_UID:?export HOST_UID=$(id -u) first}:${HOST_GID:?export HOST_GID=$(id -g) first}"
     environment:
       HOME: /tmp
     volumes:
