@@ -13,7 +13,7 @@ DISABLED = {"status": "disabled"}
 
 
 class FakeGitHub:
-    """Stands in for the GitHub API, which tests cannot call."""
+    """テストから呼べない GitHub API の代わりをする。"""
 
     def __init__(self, settings: dict[str, Any] | None) -> None:
         self.settings = settings
@@ -91,7 +91,7 @@ def test_settings_are_unknown_when_github_cannot_be_asked(tmp_path: Path) -> Non
 
 
 def test_settings_are_unknown_when_github_hides_them(tmp_path: Path) -> None:
-    # A private repository on a plan without secret scanning returns no such fields.
+    # 秘密情報のスキャンがないプランの非公開リポジトリは、これらの項目を返さない。
     repo_with_remote(tmp_path, "https://github.com/octo/demo.git")
 
     assert settings_check(tmp_path, FakeGitHub({}))["status"] == "unknown"

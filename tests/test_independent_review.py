@@ -1,4 +1,4 @@
-"""Cases found in the independent review of the scan."""
+"""scan の独立レビューで見つかった事例。"""
 
 from __future__ import annotations
 
@@ -29,7 +29,7 @@ def finding_list(found: dict[str, object]) -> list[dict[str, object]]:
     return items
 
 
-# 1. Paths that hold a secret or personal data are hidden as well.
+# 1. 秘密情報や個人情報を含むパスも隠す。
 def test_paths_with_personal_data_or_secrets_are_hidden(tmp_path: Path) -> None:
     repo = GitRepo(tmp_path)
     repo.commit(
@@ -42,7 +42,7 @@ def test_paths_with_personal_data_or_secrets_are_hidden(tmp_path: Path) -> None:
     assert AWS_KEY_ID not in output
 
 
-# 2. Control characters in a commit message cannot shift the records.
+# 2. コミットメッセージの制御文字で、レコードがずれない。
 def test_a_message_with_control_characters_cannot_leak_a_term(tmp_path: Path) -> None:
     repo = GitRepo(tmp_path)
     repo.commit({"a.txt": "a\n"}, message=f"start\x01{CLIENT_NAME}")
@@ -53,7 +53,7 @@ def test_a_message_with_control_characters_cannot_leak_a_term(tmp_path: Path) ->
     assert CLIENT_NAME not in json.dumps(result)
 
 
-# 3. Undecodable Git output does not crash the scan.
+# 3. デコードできない Git の出力で、検査が落ちない。
 def test_a_remote_url_that_is_not_utf8_does_not_crash(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -68,7 +68,7 @@ def test_a_remote_url_that_is_not_utf8_does_not_crash(
     assert "Traceback" not in capsys.readouterr().err
 
 
-# 4. Text conversion commands configured in the repository never run.
+# 4. リポジトリに設定された文字変換コマンドを実行しない。
 def test_textconv_commands_are_not_run(tmp_path: Path) -> None:
     repo = GitRepo(tmp_path / "repo")
     repo.commit({".gitattributes": "*.txt diff=conv\n", "a.txt": f"{AWS_KEY_ID}\n"})
@@ -81,7 +81,7 @@ def test_textconv_commands_are_not_run(tmp_path: Path) -> None:
     assert found["status"] == "fail"
 
 
-# 5. Lines and files that only a merge commit adds are searched.
+# 5. マージコミットだけが追加した行とファイルも探す。
 def test_a_secret_added_while_resolving_a_merge_conflict_is_found(tmp_path: Path) -> None:
     repo = GitRepo(tmp_path)
     repo.commit({"a.txt": "base\n"})
@@ -89,7 +89,7 @@ def test_a_secret_added_while_resolving_a_merge_conflict_is_found(tmp_path: Path
     repo.commit({"a.txt": "side\n"})
     repo.git("switch", "--quiet", "main")
     repo.commit({"a.txt": "main\n"})
-    repo.git("merge", "--quiet", "side", check=False)  # stops on the conflict
+    repo.git("merge", "--quiet", "side", check=False)  # コンフリクトで止まる
     (tmp_path / "a.txt").write_text(f"{AWS_KEY_ID}\n")
     repo.git("add", "a.txt")
     merge = repo.commit({".env": "KEY=1\n"}, message="merge side")
@@ -102,7 +102,7 @@ def test_a_secret_added_while_resolving_a_merge_conflict_is_found(tmp_path: Path
     assert [(f["commit"], f["path"]) for f in files] == [(merge[:12], ".env")]
 
 
-# 6. A -diff attribute does not hide text.
+# 6. -diff 属性で文字が隠れない。
 def test_text_marked_as_binary_is_still_searched(tmp_path: Path) -> None:
     repo = GitRepo(tmp_path)
     repo.commit({".gitattributes": "secret.txt -diff\n", "secret.txt": f"key {AWS_KEY_ID}\n"})
@@ -110,7 +110,7 @@ def test_text_marked_as_binary_is_still_searched(tmp_path: Path) -> None:
     assert check(scan.scan(tmp_path), "history_secrets")["status"] == "fail"
 
 
-# 7. Incomplete local history is reported instead of passing.
+# 7. 手元の履歴が足りないときは、成功にせず報告する。
 @pytest.mark.parametrize(
     ("options", "expected"),
     [([], "pass"), (["--depth", "1"], "unknown"), (["--single-branch"], "unknown")],
@@ -131,7 +131,7 @@ def test_history_coverage_depends_on_how_the_repository_was_cloned(
     assert check(scan.scan(clone), "history_coverage")["status"] == expected
 
 
-# 8. Lock files are exempt from address checks only.
+# 8. ロックファイルで除外するのは、アドレスの検査だけ。
 def test_local_paths_in_lock_files_are_found(tmp_path: Path) -> None:
     repo = GitRepo(tmp_path)
     repo.commit({"package-lock.json": f'{{"resolved": "file:{HOME}/lib"}}\n'})
@@ -139,7 +139,7 @@ def test_local_paths_in_lock_files_are_found(tmp_path: Path) -> None:
     assert check(scan.scan(tmp_path), "history_personal_data")["status"] == "fail"
 
 
-# 9. Home paths in commit messages.
+# 9. コミットメッセージのホームのパス。
 def test_a_home_path_in_a_commit_message_is_found(tmp_path: Path) -> None:
     repo = GitRepo(tmp_path)
     commit = repo.commit({"a.txt": "a\n"}, message=f"copy from {HOME}/old")
@@ -149,7 +149,7 @@ def test_a_home_path_in_a_commit_message_is_found(tmp_path: Path) -> None:
     assert finding_list(found) == [{"kind": "local_path_in_commit_message", "commit": commit[:12]}]
 
 
-# 11. Certificates are public; private key contents are found by the secret check.
+# 11. 証明書は公開のものなので対象外。秘密鍵の中身は秘密情報の検査で見つける。
 def test_a_certificate_file_is_not_a_sensitive_file(tmp_path: Path) -> None:
     repo = GitRepo(tmp_path)
     repo.commit({"certs/server.pem": "-----BEGIN " + "CERTIFICATE-----\nMIIB\n"})
@@ -157,7 +157,7 @@ def test_a_certificate_file_is_not_a_sensitive_file(tmp_path: Path) -> None:
     assert check(scan.scan(tmp_path), "sensitive_files")["status"] == "pass"
 
 
-# 12. Env files below the top level.
+# 12. 最上位より下の階層の env ファイル。
 @pytest.mark.parametrize(
     ("files", "expected"),
     [
@@ -175,7 +175,7 @@ def test_env_files_in_subdirectories_must_be_ignored(
     assert check(scan.scan(tmp_path), "env_files")["status"] == expected
 
 
-# 14. Each finding with a line carries the line with the values masked.
+# 14. 行のある指摘には、値を伏せたその行を付ける。
 def test_findings_carry_the_line_with_values_masked(tmp_path: Path) -> None:
     repo = GitRepo(tmp_path)
     repo.commit(
@@ -200,7 +200,7 @@ def test_findings_carry_the_line_with_values_masked(tmp_path: Path) -> None:
     }
 
 
-# 18. Argument errors do not echo what was given.
+# 18. 引数のエラーで、渡された値を繰り返さない。
 def test_argument_errors_do_not_echo_the_arguments(capsys: pytest.CaptureFixture[str]) -> None:
     with pytest.raises(SystemExit) as stopped:
         scan.main(["repo", f"{HOME}/secret-project"])
@@ -209,7 +209,7 @@ def test_argument_errors_do_not_echo_the_arguments(capsys: pytest.CaptureFixture
     assert "alice" not in capsys.readouterr().err
 
 
-# Second round of the independent review.
+# 独立レビューの 2 回目。
 
 
 def contexts_of(result: dict[str, object], check_id: str) -> list[object]:
@@ -285,7 +285,7 @@ def test_env_use_in_a_subproject_does_not_require_a_root_env(tmp_path: Path) -> 
     assert check(scan.scan(tmp_path), "env_files")["status"] == "pass"
 
 
-# Third round of the independent review.
+# 独立レビューの 3 回目。
 
 
 def test_carriage_returns_in_content_cannot_forge_commit_records(tmp_path: Path) -> None:
@@ -342,7 +342,7 @@ def test_env_use_in_a_subproject_without_a_known_manifest(
     assert check(scan.scan(tmp_path), "env_files")["status"] == "pass"
 
 
-# Fourth round of the independent review.
+# 独立レビューの 4 回目。
 
 
 @pytest.mark.parametrize(
@@ -368,12 +368,12 @@ def test_context_masks_a_bracketed_path_to_its_matching_closer(tmp_path: Path) -
 
     contexts = contexts_of(scan.scan(tmp_path), "history_personal_data")
 
-    # The quote inside the path makes its end ambiguous, so the rest is masked.
+    # パスの中の引用符で終わりがあいまいになるので、行末まで伏せる。
     assert contexts == ["see [plan](<local_path>"]
 
 
-# Fifth round: nested brackets and escaped quotes inside a path. When the end of
-# a path is ambiguous, the rest of the line is masked.
+# 独立レビューの 5 回目。パスの中の入れ子の括弧とエスケープされた引用符。
+# パスの終わりがあいまいなときは、行末まで伏せる。
 
 
 @pytest.mark.parametrize(

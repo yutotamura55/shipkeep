@@ -1,14 +1,12 @@
-"""Scan a Git repository for problems to fix before making it public.
+"""公開する前に直すべき問題を、Git リポジトリから探す。
 
-The scan only reads the repository. It looks at what a push publishes: the
-local branches and tags, and the branches of the origin remote, which become
-public too when a repository on GitHub is made public. It prints one JSON
-document to standard output, so that an agent can turn each check into a
-report row.
+リポジトリは読むだけで変更しない。対象は push で公開されるもの、つまりローカルの
+ブランチとタグに加え、origin のブランチである。origin のブランチは、GitHub の
+リポジトリを公開すると一緒に公開される。結果は JSON を 1 つ標準出力に出し、
+エージェントが項目ごとに報告の行へ変換できるようにする。
 
-The output never contains the value of a secret, personal data, a denylist
-term, or a local path: findings give the kind, the location, and the line with
-those values masked.
+出力には秘密情報、個人情報、禁止語、ローカルのパスの値を含めない。指摘に含めるのは、
+種類、場所、それらの値を伏せた行だけである。
 """
 
 from __future__ import annotations
@@ -30,8 +28,8 @@ SCHEMA_VERSION = 1
 Check = dict[str, Any]
 Finding = dict[str, Any]
 
-# Settings that would change the output this script parses. They are fixed on
-# every Git command, so that the user's configuration cannot hide a finding.
+# この script が解析する出力を変えてしまう設定。利用者の設定で指摘が隠れないよう、
+# すべての Git コマンドで固定する。
 GIT_SETTINGS = (
     "core.quotePath=false",
     "color.ui=never",
@@ -41,12 +39,12 @@ GIT_SETTINGS = (
     "log.showRoot=true",
     "log.showSignature=false",
 )
-# What a push publishes, and what becomes public when an existing GitHub
-# repository is made public. Stashes and other remotes are left out.
+# push で公開されるものと、既存の GitHub リポジトリを公開したときに公開されるもの。
+# stash と origin 以外のリモートは対象外。
 PUBLISHED_REFS = ("--branches", "--tags", "--remotes=origin")
 PUBLISHED_REF_PREFIXES = ("refs/heads", "refs/tags", "refs/remotes/origin")
-# Merge commits are compared with all their parents, so that only the lines a
-# merge itself introduces (such as a conflict resolution) are searched there.
+# マージコミットはすべての親と比べ、マージ自体が持ち込んだ行 (コンフリクトの解消など)
+# だけを探す。
 MERGE_DIFFS = "--diff-merges=dense-combined"
 ORIGIN_FETCH_ALL = "refs/heads/*:refs/remotes/origin/*"
 COMMIT_HASH = re.compile(r"[0-9a-f]{40}(?:[0-9a-f]{24})?")
@@ -63,22 +61,22 @@ SECRET_PATTERNS = {
     "llm_api_key": re.compile(r"\bsk-(?:ant-|proj-)?[A-Za-z0-9_-]{32,}"),
     "stripe_secret_key": re.compile(r"\b[rs]k_live_[0-9A-Za-z]{24,}"),
 }
-# Long runs of key-like characters are masked in context lines even when no
-# pattern names them, because they may be secrets of an unknown format.
+# 鍵のような文字の長い並びは、どのパターンにも当たらなくても該当行で伏せる。
+# 未知の形式の秘密情報かもしれないため。
 KEY_LIKE = re.compile(r"[A-Za-z0-9+/_-]{20,}")
-# The start of a local path. After a bracket or quote, the mask runs to its
-# closer, so that a path with spaces stays hidden; otherwise to whitespace.
+# ローカルのパスの始まり。括弧や引用符の直後なら閉じる記号まで伏せ、空白を含むパスも
+# 隠す。それ以外は次の空白まで伏せる。
 LOCAL_PATH_START = re.compile(r"(?:/home/|/Users/|[A-Za-z]:\\+Users\\+)[A-Za-z0-9_.-]+")
 CLOSERS = {"(": ")", "[": "]", "<": ">", "'": "'", '"': '"', "`": "`"}
-# Values after "=" or ":" may be passwords of any length.
+# "=" や ":" の後の値は、長さを問わずパスワードの可能性がある。
 ASSIGNED_VALUE = re.compile(r"[=:]\s*([^\s'\"]+)")
 CONTEXT_LENGTH = 200
 
 EMAIL = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}")
-# Documentation domains reserved by RFC 2606. Only the exact domains are public;
-# a subdomain such as mail.example.net is still reported.
+# RFC 2606 で文書用に予約されたドメイン。公開してよいのは完全に一致するものだけで、
+# mail.example.net のようなサブドメインは報告する。
 EXAMPLE_DOMAINS = {"example.com", "example.org", "example.net"}
-# Asset names such as logo@2x.png look like addresses.
+# logo@2x.png のような素材のファイル名は、メールアドレスに見える。
 FILE_EXTENSIONS = {
     "png",
     "jpg",
@@ -107,11 +105,11 @@ HOME_PATHS = (
     re.compile(r"(/Users/)" + USER_NAME),
     re.compile(r"([A-Za-z]:\\+Users\\+)" + USER_NAME),
 )
-# User names that appear in documentation and CI rather than on a real machine.
+# 実際の端末ではなく、文書や CI に現れる利用者名。
 GENERIC_USER_NAMES = {"user", "username", "runner", "ubuntu", "app", "node", "vscode", "shared"}
 
-# Lock files copy the published contact details of third-party package authors,
-# so addresses in them are not reported. Local paths still are.
+# ロックファイルには、第三者のパッケージ作者が公開した連絡先が写される。そのため
+# アドレスは報告しない。ローカルのパスは報告する。
 LOCK_FILE_NAMES = {
     "package-lock.json",
     "npm-shrinkwrap.json",
@@ -126,8 +124,8 @@ LOCK_FILE_NAMES = {
     "Gemfile.lock",
     "go.sum",
 }
-# Binary files are read as text so that a -diff attribute cannot hide text;
-# files with these extensions are skipped to avoid matches in binary data.
+# -diff 属性で文字が隠れないよう、バイナリファイルも文字列として読む。次の拡張子の
+# ファイルは、バイナリのデータに誤って一致しないよう読み飛ばす。
 BINARY_EXTENSIONS = {
     ".png",
     ".jpg",
@@ -171,8 +169,8 @@ BINARY_EXTENSIONS = {
 
 ENV_EXAMPLE_SUFFIXES = (".example", ".sample", ".template", ".dist")
 PRIVATE_KEY_FILE_NAMES = {"id_rsa", "id_dsa", "id_ecdsa", "id_ed25519"}
-# Key stores always hold private keys. PEM files are often public certificates;
-# a private key inside one is found by the secret patterns instead.
+# キーストアには必ず秘密鍵が入っている。PEM ファイルは公開の証明書であることが多く、
+# その中の秘密鍵は秘密情報のパターンで見つける。
 PRIVATE_KEY_FILE_SUFFIXES = (".p12", ".pfx", ".jks", ".keystore")
 CREDENTIAL_FILE_NAMES = {"credentials.json", ".netrc", ".pypirc"}
 
@@ -181,16 +179,15 @@ GITHUB_REMOTE = re.compile(
     r"([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+?)(?:\.git)?/?$"
 )
 
-# Code and configuration that load a .env file. The patterns match the call or
-# the key, not the bare word, so that text that only mentions dotenv does not
-# count. Reading os.environ or process.env is left out: it also reads variables
-# set by the shell or CI, so it does not show that a .env file exists.
+# .env ファイルを読むコードと設定。単語そのものではなく呼び出しやキーに一致させ、
+# dotenv に触れているだけの文を数えない。os.environ と process.env は対象外にする。
+# シェルや CI が設定した変数も読むので、.env ファイルがある根拠にならないため。
 ENV_FILE_USAGE = (
     r"load_dotenv\(|dotenv_values\(|require\(['\"]dotenv['\"]\)|['\"]dotenv/config['\"]"
     r"|from ['\"]dotenv['\"]|^\s*env_file\s*[:=]"
 )
 DOTENV_EXAMPLE_NAMES = {".env.example", ".env.sample", ".env.template", ".env.dist"}
-# Files that mark the top of a project, where it keeps its .env file.
+# プロジェクトの最上位を示すファイル。.env ファイルはこの階層に置かれる。
 PROJECT_MARKERS = (
     "package.json",
     "pyproject.toml",
@@ -207,7 +204,7 @@ PROJECT_MARKERS = (
     "composer.json",
     "Gemfile",
 )
-# Cloudflare Workers projects keep local secrets in .dev.vars.
+# Cloudflare Workers のプロジェクトは、ローカルの秘密情報を .dev.vars に置く。
 WRANGLER_CONFIG_NAMES = {"wrangler.toml", "wrangler.json", "wrangler.jsonc"}
 WRANGLER_EXAMPLE_NAMES = {".dev.vars.example"}
 TEST_PATHSPECS = (
@@ -230,10 +227,10 @@ def git_command(root: Path, *args: str) -> list[str]:
 
 
 def git(root: Path, *args: str, check: bool = True) -> str:
-    """Run a read-only Git command in ``root`` and return its standard output."""
+    """読み取り専用の Git コマンドを ``root`` で実行し、標準出力を返す。"""
     completed = subprocess.run(git_command(root, *args), capture_output=True, check=check)
-    # Decoded by hand: text mode would turn a bare CR in file content into LF,
-    # which could forge a line of the patch.
+    # 手作業でデコードする。テキストモードではファイル内の単独の CR が LF に変わり、
+    # patch の行を偽造できてしまう。
     return completed.stdout.decode("utf-8", errors="replace")
 
 
@@ -243,7 +240,7 @@ def git_succeeds(root: Path, *args: str) -> bool:
 
 
 def repository_root(path: Path) -> Path:
-    """Return the top of the work tree that contains ``path``, or ``path`` for a bare one."""
+    """``path`` を含む作業ツリーの最上位を返す。bare リポジトリなら ``path`` を返す。"""
     if git(path, "rev-parse", "--is-bare-repository").strip() == "true":
         return path
     return Path(git(path, "rev-parse", "--show-toplevel").strip())
@@ -260,7 +257,7 @@ def result(
 
 
 def unquote_path(text: str) -> str:
-    """Undo the C-style quoting Git applies to unusual file names."""
+    """Git が特殊なファイル名に付ける C 言語風の引用を元に戻す。"""
     if text.startswith('"') and text.endswith('"'):
         unquoted = ast.literal_eval(text)
         if isinstance(unquoted, str):
@@ -277,9 +274,9 @@ class AddedLine:
 
 
 def added_lines(root: Path) -> Iterator[AddedLine]:
-    """Yield every line that a published commit added, with its location.
+    """公開されるコミットが追加した行を、場所とともに 1 行ずつ返す。
 
-    For a merge commit, only the lines that differ from every parent count.
+    マージコミットでは、すべての親と異なる行だけを数える。
     """
     log = git(
         root,
@@ -302,7 +299,7 @@ def added_lines(root: Path) -> Iterator[AddedLine]:
     in_header = False
     parents = 1
     line = 0
-    # Split on LF only: with --text, file content can hold other line breaks.
+    # LF だけで分割する。--text ではファイルの内容に別の改行が含まれることがある。
     for text in log.split("\n"):
         if text.startswith("\0commit ") and COMMIT_HASH.fullmatch(text[8:]):
             commit = text[8:20]
@@ -310,30 +307,30 @@ def added_lines(root: Path) -> Iterator[AddedLine]:
         elif text.startswith(("diff --git ", "diff --cc ", "diff --combined ")):
             path, in_header = None, True
         elif in_header and text.startswith("+++ "):
-            # Git ends the name with a tab when it contains a space.
+            # ファイル名に空白があると、Git は名前の末尾にタブを付ける。
             name = unquote_path(text.removeprefix("+++ ").rstrip("\t"))
             path = name.removeprefix("b/") if name.startswith("b/") else None
             if path is not None and PurePosixPath(path).suffix.lower() in BINARY_EXTENSIONS:
                 path = None
         elif text.startswith("@@"):
             in_header = False
-            # A hunk header has one more "@" than the commit has parents.
+            # hunk のヘッダーの "@" は、コミットの親の数より 1 つ多い。
             parents = len(text) - len(text.lstrip("@")) - 1
             match = re.search(r"\+(\d+)", text)
             line = int(match.group(1)) if match else 0
         elif text.startswith("\\"):
-            continue  # "\ No newline at end of file"
+            continue  # "\ No newline at end of file" の行
         elif not in_header and path is not None and text[:parents] != " " * parents:
             markers = text[:parents]
             if "-" in markers:
-                continue  # a removed line is not in the result
+                continue  # 削除された行は結果に含まれない
             if markers == "+" * parents:
                 yield AddedLine(commit, path, line, text[parents:])
             line += 1
 
 
 def added_files(root: Path) -> Iterator[tuple[str, str]]:
-    """Yield the abbreviated hash and path of every file that a published commit added."""
+    """公開されるコミットが追加した各ファイルの、短いハッシュとパスを返す。"""
     log = git(
         root,
         "log",
@@ -353,8 +350,8 @@ def added_files(root: Path) -> Iterator[tuple[str, str]]:
 
 
 def commit_messages(root: Path) -> Iterator[tuple[str, str]]:
-    """Yield the abbreviated hash and the full message of every published commit."""
-    # Git does not allow NUL in a commit message, so -z separates records safely.
+    """公開される各コミットの、短いハッシュとメッセージ全文を返す。"""
+    # コミットメッセージに NUL は入らないので、-z で安全にレコードを分けられる。
     log = git(root, "log", *PUBLISHED_REFS, "-z", "--format=%H%n%B")
     for record in log.split("\0"):
         commit, _, message = record.partition("\n")
@@ -372,7 +369,7 @@ def is_noreply_address(address: str) -> bool:
 
 
 def is_public_address(address: str) -> bool:
-    """Return whether an address-like string in content is safe to publish."""
+    """本文にあるアドレス風の文字列を公開してよいかを返す。"""
     local, _, domain = address.lower().rpartition("@")
     return (
         is_noreply_address(address)
@@ -401,7 +398,7 @@ def has_secret(text: str) -> bool:
 
 
 def matching_terms(text: str, denylist: list[str]) -> list[int]:
-    """Return the 1-based numbers of the denylist terms that appear in ``text``."""
+    """``text`` に現れる禁止語の番号 (1 始まり) を返す。"""
     lowered = text.lower()
     return [number for number, term in enumerate(denylist, 1) if term.lower() in lowered]
 
@@ -410,14 +407,13 @@ Span = tuple[int, int, str]
 
 
 def local_path_spans(text: str) -> list[Span]:
-    """Return the span of each local path, masking the rest of the line when its end is unclear.
+    """各ローカルパスの範囲を返す。終わりが不明なときは行末まで伏せる。
 
-    After a bracket or quote, a path runs to the closer, so that a path with
-    spaces stays hidden; otherwise it runs to whitespace. When another closer
-    follows, or a quote falls inside the span, the end is ambiguous: a nested
-    bracket or an escaped quote could end it early, and a swallowed quote would
-    expose the quoted text after it. Then the rest of the line is masked, which
-    hides more, never less.
+    括弧や引用符の直後のパスは閉じる記号までとし、空白を含むパスも隠す。それ以外は
+    次の空白までとする。閉じる記号がさらに続くときや、範囲に引用符が入るときは、
+    終わりがあいまいである。入れ子の括弧やエスケープされた引用符で早く切れるおそれが
+    あり、範囲に飲み込まれた引用符があると、その後の引用文が見えてしまう。そのときは
+    行末まで伏せる。隠しすぎることはあっても、隠し足りないことはない。
     """
     spans = []
     for match in LOCAL_PATH_START.finditer(text):
@@ -439,7 +435,7 @@ def local_path_spans(text: str) -> list[Span]:
 
 
 def quoted_spans(text: str) -> list[tuple[int, int]]:
-    """Return the inside of each quoted string, pairing every quote with the next of its kind."""
+    """各引用符を次の同じ種類の引用符と組にし、引用文の中身の範囲を返す。"""
     spans = []
     position = 0
     while position < len(text):
@@ -455,10 +451,10 @@ def quoted_spans(text: str) -> list[tuple[int, int]]:
 
 
 def masked(text: str, denylist: list[str]) -> str:
-    """Return ``text`` with every confidential value replaced by a placeholder.
+    """``text`` の秘密の値をすべてプレースホルダーに置き換えて返す。
 
-    Every rule marks spans of the original text, and placeholders are written
-    once at the end, so that text resembling a placeholder cannot fool a rule.
+    どの規則も元の文字列の範囲に印を付け、プレースホルダーは最後に一度だけ書く。
+    プレースホルダーに似た文字列で規則がだまされないようにするためである。
     """
     detected: list[Span] = []
     for kind, pattern in SECRET_PATTERNS.items():
@@ -474,8 +470,8 @@ def masked(text: str, denylist: list[str]) -> str:
             (m.start(), m.end(), f"term {number}")
             for m in re.finditer(re.escape(term), text, flags=re.IGNORECASE)
         ]
-    # The general rules run on the text with the detected values blanked out, so
-    # that a quote or a slash inside a detected value cannot start a new span.
+    # 一般の規則は、検出した値を空白にした文字列で実行する。検出した値の中の引用符や
+    # スラッシュが、新しい範囲を始めないようにするため。
     blanked = list(text)
     for start, end, _ in detected:
         blanked[start:end] = "\x01" * (end - start)
@@ -485,7 +481,7 @@ def masked(text: str, denylist: list[str]) -> str:
         *((m.start(1), m.end(1)) for m in ASSIGNED_VALUE.finditer(rest)),
         *((m.start(), m.end()) for m in KEY_LIKE.finditer(rest)),
     ]
-    # A general span that lies inside a detected value adds nothing.
+    # 検出した値の中に収まる一般の範囲は、何も加えない。
     spans = detected + [
         (start, end, "redacted")
         for start, end in generic
@@ -493,8 +489,8 @@ def masked(text: str, denylist: list[str]) -> str:
         and not any(d_start <= start and end <= d_end for d_start, d_end, _ in detected)
     ]
 
-    # Overlapping spans become one placeholder: their kind when they all share
-    # it, "redacted" when they differ.
+    # 重なる範囲は 1 つのプレースホルダーにする。種類がすべて同じならその種類、
+    # 異なれば "redacted" にする。
     groups: list[list[Span]] = []
     for span in sorted(spans):
         if groups and span[0] < max(end for _, end, _ in groups[-1]):
@@ -536,7 +532,7 @@ def sensitive_file_kind(path: str) -> str | None:
 
 
 def check_history_coverage(root: Path) -> Check:
-    """Check that the local repository holds the whole history that would be published."""
+    """公開される履歴のすべてが手元のリポジトリにあることを確かめる。"""
     findings: list[Finding] = []
     if git(root, "rev-parse", "--is-shallow-repository").strip() == "true":
         findings.append({"kind": "shallow_clone"})
@@ -557,7 +553,7 @@ def check_history_coverage(root: Path) -> Check:
 
 
 def check_commit_identity(root: Path) -> Check:
-    """Find commits whose author or committer address is not a GitHub noreply address."""
+    """author または committer のアドレスが GitHub の noreply でないコミットを探す。"""
     findings = []
     log = git(root, "log", *PUBLISHED_REFS, "--format=%H%x00%ae%x00%ce")
     for line in log.splitlines():
@@ -584,7 +580,7 @@ class HistoryFindings:
 
 
 def search_history(root: Path, denylist: list[str]) -> HistoryFindings:
-    """Search added lines, file names, messages, and refs for secrets, personal data, and terms."""
+    """追加行、ファイル名、メッセージ、ref から、秘密情報、個人情報、禁止語を探す。"""
     found = HistoryFindings([], [], [])
     for added in added_lines(root):
         location = {
@@ -658,7 +654,7 @@ def check_history_content(root: Path, denylist: list[str] | None) -> list[Check]
 
 
 def check_sensitive_files(root: Path) -> Check:
-    """Find files that should never be committed, in every commit that added one."""
+    """コミットしてはいけないファイルを、それを追加したすべてのコミットから探す。"""
     findings = [
         {"kind": kind, "commit": commit, "path": path}
         for commit, path in added_files(root)
@@ -675,15 +671,15 @@ def check_sensitive_files(root: Path) -> Check:
 
 
 def tree_paths(root: Path, *options: str) -> list[str]:
-    """Return the paths in the HEAD commit, from the top of the repository."""
+    """HEAD のコミットにあるパスを、リポジトリの最上位から返す。"""
     listing = git(root, "ls-tree", *options, "--full-tree", "--name-only", "HEAD")
     return [unquote_path(path) for path in listing.splitlines()]
 
 
 def project_directory(path: str, paths: set[str]) -> str:
-    """Return the nearest directory above ``path`` that holds a project file or an env example.
+    """``path`` より上で最も近い、プロジェクトのファイルか env の例を持つディレクトリを返す。
 
-    Returns "" (the top of the repository) when no such directory exists.
+    そのようなディレクトリがなければ "" (リポジトリの最上位) を返す。
     """
     directory = PurePosixPath(path).parent
     markers = (*PROJECT_MARKERS, *sorted(DOTENV_EXAMPLE_NAMES))
@@ -695,7 +691,7 @@ def project_directory(path: str, paths: set[str]) -> str:
 
 
 def env_file_users(root: Path, paths: set[str]) -> set[str]:
-    """Return the project directories whose code (outside tests) loads a .env file."""
+    """.env ファイルを読むコード (テストを除く) があるプロジェクトのディレクトリを返す。"""
     listing = git(
         root,
         "grep",
@@ -715,7 +711,7 @@ def env_file_users(root: Path, paths: set[str]) -> set[str]:
 
 
 def glob_match(pattern: list[str], path: list[str]) -> bool:
-    """Match path segments the way Git does: "*" stays in one segment, "**" spans any."""
+    """Git と同じ方法でパスを照合する。"*" は 1 階層内、"**" は複数の階層に一致する。"""
     if not pattern:
         return not path
     if pattern[0] == "**":
@@ -728,11 +724,10 @@ def glob_match(pattern: list[str], path: list[str]) -> bool:
 
 
 def gitignore_matches(pattern: str, relative: str) -> bool | None:
-    """Return whether one .gitignore line ignores the file at ``relative``.
+    """.gitignore の 1 行が ``relative`` のファイルを無視するかを返す。
 
-    ``relative`` is relative to the directory of the .gitignore. Returns None
-    when the line does not apply, True when it ignores the file, and False when
-    it re-includes it.
+    ``relative`` は .gitignore のあるディレクトリからの相対パス。その行が当てはまらない
+    ときは None、無視するときは True、無視の対象から戻すときは False を返す。
     """
     pattern = pattern.strip()
     if not pattern or pattern.startswith("#"):
@@ -740,8 +735,8 @@ def gitignore_matches(pattern: str, relative: str) -> bool | None:
     negated = pattern.startswith("!")
     pattern = pattern.removeprefix("!")
     if pattern.endswith("/"):
-        return None  # matches directories only
-    # A pattern with a slash is relative to the .gitignore; others match at any depth.
+        return None  # ディレクトリだけに一致する
+    # スラッシュを含むパターンは .gitignore からの相対。それ以外はどの階層にも一致する。
     parts = pattern.removeprefix("/").split("/") if "/" in pattern else ["**", pattern]
     if not glob_match(parts, relative.split("/")):
         return None
@@ -749,7 +744,7 @@ def gitignore_matches(pattern: str, relative: str) -> bool | None:
 
 
 def is_ignored(root: Path, paths: set[str], target: str) -> bool:
-    """Return whether the .gitignore files at HEAD ignore the file ``target``."""
+    """HEAD の .gitignore ファイルが ``target`` のファイルを無視するかを返す。"""
     ignored = False
     parts = PurePosixPath(target).parts
     for depth in range(len(parts)):
@@ -766,7 +761,7 @@ def is_ignored(root: Path, paths: set[str], target: str) -> bool:
 
 
 def env_targets(root: Path, paths: list[str]) -> dict[str, set[str]]:
-    """Return each local env file the project expects, with the example names that cover it."""
+    """プロジェクトが使うローカルの env ファイルごとに、対応する例のファイル名を返す。"""
     targets: dict[str, set[str]] = {}
     for path in paths:
         directory, name = str(PurePosixPath(path).parent), PurePosixPath(path).name
@@ -781,7 +776,7 @@ def env_targets(root: Path, paths: list[str]) -> dict[str, set[str]]:
 
 
 def check_env_files(root: Path) -> Check:
-    """Check that each local env file a project expects is ignored and has an example."""
+    """プロジェクトが使うローカルの env ファイルに、ignore の規則と例があるかを確かめる。"""
     paths = tree_paths(root, "-r")
     path_set = set(paths)
     targets = env_targets(root, paths)
@@ -819,17 +814,17 @@ def check_readme(root: Path) -> Check:
 
 
 def github_repository(root: Path) -> str | None:
-    """Return "owner/name" of the origin remote when it is on GitHub."""
+    """origin のリモートが GitHub にあれば "owner/name" を返す。"""
     url = git(root, "config", "--get", "remote.origin.url", check=False).strip()
     match = GITHUB_REMOTE.match(url)
     return match.group(1) if match else None
 
 
 def fetch_security_settings(repository: str) -> dict[str, Any] | None:
-    """Read the security settings of a GitHub repository with the gh CLI.
+    """gh CLI で GitHub リポジトリのセキュリティ設定を読む。
 
-    Returns None when gh is missing, not signed in, or cannot see the repository.
-    The error output of gh is discarded because it can contain local details.
+    gh がない、サインインしていない、リポジトリを読めないときは None を返す。
+    gh のエラー出力にはローカルの情報が含まれることがあるため、捨てる。
     """
     try:
         completed = subprocess.run(
@@ -855,7 +850,7 @@ def check_github_settings(
     root: Path,
     fetch: Callable[[str], dict[str, Any] | None] = fetch_security_settings,
 ) -> Check:
-    """Check that GitHub secret scanning and push protection are on for the origin remote."""
+    """origin の GitHub で秘密情報のスキャンと push protection が有効かを確かめる。"""
     repository = github_repository(root)
     if repository is None:
         return result("github_settings", "not_applicable", "the origin remote is not on GitHub")
@@ -881,7 +876,7 @@ def check_github_settings(
 
 
 def hide_confidential_paths(checks: list[Check], denylist: list[str]) -> None:
-    """Replace every finding path that holds a secret, personal data, or a denylist term."""
+    """秘密情報、個人情報、禁止語を含む指摘のパスをすべて置き換える。"""
     for check in checks:
         for finding in check["findings"]:
             for field in ("path", "file"):
@@ -909,10 +904,10 @@ CHECK_IDS = (
 
 
 def scan(root: Path, denylist: list[str] | None = None) -> dict[str, Any]:
-    """Return the scan result for the repository that contains ``root``.
+    """``root`` を含むリポジトリの検査結果を返す。
 
-    ``denylist`` holds terms that must not appear in the history; findings refer
-    to a term by its 1-based position in the list, never by its text.
+    ``denylist`` は履歴に現れてはいけない語の一覧。指摘では語そのものを示さず、
+    一覧の中の番号 (1 始まり) で示す。
     """
     root = repository_root(root)
     if not has_commits(root):
@@ -939,25 +934,25 @@ def scan(root: Path, denylist: list[str] | None = None) -> dict[str, Any]:
 
 
 def is_git_repository(path: Path) -> bool:
-    """Return whether ``path`` is inside a work tree or is a bare repository.
+    """``path`` が作業ツリーの中にあるか、bare リポジトリであるかを返す。
 
-    Raises ``OSError`` when Git cannot be started.
+    Git を起動できないときは ``OSError`` を送出する。
     """
     return git_succeeds(path, "rev-parse", "--git-dir")
 
 
 def read_denylist(path: Path) -> list[str]:
-    """Read one term per line; blank lines and lines starting with '#' are skipped.
+    """語を 1 行に 1 つずつ読む。空行と '#' で始まる行は飛ばす。
 
-    Raises ``OSError`` when the file cannot be read, and ``UnicodeDecodeError``
-    when it is not UTF-8 text.
+    ファイルを読めないときは ``OSError``、UTF-8 でないときは ``UnicodeDecodeError``
+    を送出する。
     """
     lines = path.read_text(encoding="utf-8-sig").splitlines()
     return [term.strip() for term in lines if term.strip() and not term.strip().startswith("#")]
 
 
 class QuietArgumentParser(argparse.ArgumentParser):
-    """Report argument errors without repeating the arguments, which may be local paths."""
+    """引数のエラーを、引数を繰り返さずに報告する。ローカルパスが含まれることがあるため。"""
 
     def error(self, message: str) -> NoReturn:
         self.print_usage(sys.stderr)
@@ -965,7 +960,9 @@ class QuietArgumentParser(argparse.ArgumentParser):
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = QuietArgumentParser(description=(__doc__ or "").splitlines()[0])
+    parser = QuietArgumentParser(
+        description="Scan a Git repository for problems to fix before making it public."
+    )
     parser.add_argument("root", type=Path, help="path to the repository to scan")
     parser.add_argument(
         "--denylist",
@@ -973,7 +970,7 @@ def main(argv: list[str] | None = None) -> int:
         help="file with one term per line that must not appear in the history",
     )
     args = parser.parse_args(argv)
-    # Error messages are fixed text: exception messages can contain local paths.
+    # エラーメッセージは固定文にする。例外のメッセージにはローカルパスが入ることがある。
     denylist = None
     if args.denylist is not None:
         try:

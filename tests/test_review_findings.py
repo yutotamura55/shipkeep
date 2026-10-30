@@ -1,4 +1,4 @@
-"""Cases found in the self-review of the first version of the scan."""
+"""scan の最初の版の自己レビューで見つかった事例。"""
 
 from __future__ import annotations
 
@@ -31,7 +31,7 @@ def finding_list(found: dict[str, object]) -> list[dict[str, object]]:
     return items
 
 
-# 1. The user's Git configuration must not change what the scan reads.
+# 1. 利用者の Git の設定で、検査が読む内容を変えない。
 @pytest.mark.parametrize(
     "setting",
     [("diff.noprefix", "true"), ("log.showRoot", "false"), ("diff.mnemonicPrefix", "true")],
@@ -46,7 +46,7 @@ def test_history_scan_ignores_git_settings_that_change_the_patch(
     assert status(tmp_path, "history_secrets") == "fail"
 
 
-# 2. A subdirectory of a work tree is scanned as the whole repository.
+# 2. 作業ツリーのサブディレクトリを指定しても、リポジトリ全体を調べる。
 def test_scanning_a_subdirectory_reads_the_top_of_the_repository(tmp_path: Path) -> None:
     repo = GitRepo(tmp_path)
     repo.commit({"LICENSE": "MIT\n", "README.md": "# demo\n", "sub/notes.md": "x\n"})
@@ -67,7 +67,7 @@ def test_cli_scans_a_subdirectory_without_a_readme_of_its_own(
     assert check(json.loads(capsys.readouterr().out), "readme")["status"] == "fail"
 
 
-# 3. Denylist files saved with a BOM or in another encoding.
+# 3. BOM 付きや別の文字コードで保存した禁止語のファイル。
 def test_denylist_file_with_a_bom_matches_its_first_term(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -97,7 +97,7 @@ def test_denylist_file_that_is_not_utf8_stops_without_a_traceback(
     assert str(tmp_path) not in err
 
 
-# 4. .gitignore patterns.
+# 4. .gitignore のパターン。
 @pytest.mark.parametrize(("pattern", "expected"), [("**/.env\n", "pass"), (".env/\n", "fail")])
 def test_env_ignore_rule_follows_gitignore_semantics(
     tmp_path: Path, pattern: str, expected: str
@@ -114,7 +114,7 @@ def test_env_ignore_rule_follows_gitignore_semantics(
     assert status(tmp_path, "env_files") == expected
 
 
-# 5. Wrangler projects keep secrets in .dev.vars.
+# 5. Wrangler のプロジェクトは秘密情報を .dev.vars に置く。
 def test_wrangler_project_passes_when_dev_vars_is_ignored(tmp_path: Path) -> None:
     repo = GitRepo(tmp_path)
     repo.commit(
@@ -142,7 +142,7 @@ def test_wrangler_project_fails_when_only_env_is_ignored(tmp_path: Path) -> None
     ]
 
 
-# 6. Denylist terms in file and branch names.
+# 6. ファイル名とブランチ名の禁止語。
 def test_denylist_finds_a_term_in_a_file_name_and_hides_it(tmp_path: Path) -> None:
     repo = GitRepo(tmp_path)
     commit = repo.commit({f"docs/{CLIENT_NAME}-proposal.md": "draft\n"})
@@ -172,7 +172,7 @@ def test_denylist_finds_a_term_in_a_branch_name(tmp_path: Path) -> None:
     assert finding_list(found) == [{"kind": "term_in_ref", "term": 1}]
 
 
-# 7. Home paths at the end of a line or before a quote.
+# 7. 行末や引用符の前にあるホームのパス。
 @pytest.mark.parametrize(
     "line", ["HOME=/home/" + "alice", 'path = "/Users/' + 'alice"', "cd C:\\Users\\" + "alice"]
 )
@@ -183,7 +183,7 @@ def test_home_paths_without_a_trailing_slash_are_found(tmp_path: Path, line: str
     assert status(tmp_path, "history_personal_data") == "fail"
 
 
-# 8. Patch lines that look like headers, and file names with spaces or quotes.
+# 8. ヘッダーに見える patch の行と、空白や引用符を含むファイル名。
 def test_content_that_looks_like_a_patch_header_does_not_hide_later_lines(tmp_path: Path) -> None:
     repo = GitRepo(tmp_path)
     commit = repo.commit({"notes.md": "++ b/elsewhere\n" + f"key = '{AWS_KEY_ID}'\n"})
@@ -211,7 +211,7 @@ def test_file_names_with_spaces_or_quotes_are_read(tmp_path: Path, name: str) ->
     assert [f["path"] for f in finding_list(found)] == [name]
 
 
-# 9. Only what a push publishes: branches, tags, and the origin remote.
+# 9. 調べるのは push で公開されるものだけ。ブランチ、タグ、origin のリモート。
 def test_stashed_work_is_not_scanned(tmp_path: Path) -> None:
     repo = GitRepo(tmp_path)
     repo.commit({"config.py": "key = None\n"})
@@ -235,7 +235,7 @@ def test_branches_of_other_remotes_are_not_scanned_but_origin_is(tmp_path: Path)
     assert status(tmp_path / "repo", "history_secrets") == "fail"
 
 
-# 10. Asset names that look like addresses.
+# 10. アドレスに見える素材のファイル名。
 def test_retina_image_names_are_not_addresses(tmp_path: Path) -> None:
     repo = GitRepo(tmp_path)
     repo.commit({"index.html": '<img src="logo@2x.png" srcset="bg@3x.webp">\n'})
@@ -248,7 +248,7 @@ def test_git_failure_stops_without_a_traceback(
 ) -> None:
     repo = GitRepo(tmp_path)
     repo.commit({"a.txt": "a\n"})
-    # A missing object makes every history command fail.
+    # オブジェクトが欠けていると、履歴を読むコマンドがすべて失敗する。
     objects = tmp_path / ".git" / "objects"
     for folder in objects.iterdir():
         if len(folder.name) == 2:

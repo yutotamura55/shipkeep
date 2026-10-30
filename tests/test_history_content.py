@@ -7,8 +7,8 @@ from gitrepo import GitRepo
 
 import scan
 
-# Fake secrets and personal data are joined at run time, so that this file
-# holds nothing that a secret scanner or a reader would take for the real thing.
+# 偽の秘密情報と個人情報は実行時に連結する。秘密情報のスキャナーや読者が本物と
+# 受け取るものを、このファイルに残さないため。
 AWS_KEY_ID = "AKIA" + "Q" * 16
 GITHUB_TOKEN = "ghp" + "_" + "a1B2" * 9
 PRIVATE_KEY_HEADER = "-----BEGIN " + "OPENSSH PRIVATE KEY-----"
@@ -160,7 +160,7 @@ def test_sensitive_files_find_files_that_were_added_and_later_deleted(tmp_path: 
 
 
 def test_personal_data_ignores_package_authors_in_lock_files(tmp_path: Path) -> None:
-    # Lock files copy the published contact of third-party package authors.
+    # ロックファイルには、第三者のパッケージ作者が公開した連絡先が写される。
     repo = GitRepo(tmp_path)
     repo.commit({"package-lock.json": f'{{"author": "{PERSONAL_EMAIL}"}}\n'})
 

@@ -7,7 +7,7 @@ from gitrepo import GitRepo
 
 import scan
 
-# Built at run time so that the source holds no address that looks personal.
+# 個人のものに見えるアドレスをソースに残さないよう、実行時に組み立てる。
 PERSONAL_EMAIL = "someone" + "@" + "mail.example.net"
 
 

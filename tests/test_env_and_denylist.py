@@ -8,7 +8,7 @@ from gitrepo import GitRepo
 
 import scan
 
-# A business name the user does not want to publish, kept out of this file's text.
+# 利用者が公開したくない会社名。このファイルの文字列には残さない。
 CLIENT_NAME = "Acme" + "Holdings"
 
 
@@ -127,8 +127,8 @@ def test_cli_reads_the_denylist_file_and_skips_comments(
 def test_env_files_ignore_environment_use_that_does_not_need_a_dotenv_file(
     tmp_path: Path,
 ) -> None:
-    # Passing the environment to a child process, and test fixtures that mention
-    # process.env, do not mean the project reads a .env file.
+    # 環境変数を子プロセスに渡すことや、process.env に触れるテスト用のデータは、
+    # プロジェクトが .env ファイルを読むことを意味しない。
     repo = GitRepo(tmp_path)
     repo.commit(
         {
@@ -188,7 +188,7 @@ def test_env_files_apply_to_code_that_imports_dotenv_config(tmp_path: Path) -> N
 
 
 def test_env_files_ignore_a_script_that_only_sets_process_env(tmp_path: Path) -> None:
-    # Reading or setting process.env does not mean the project keeps a .env file.
+    # process.env の読み書きは、プロジェクトが .env ファイルを持つことを意味しない。
     repo = GitRepo(tmp_path)
     repo.commit(
         {

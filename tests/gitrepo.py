@@ -1,4 +1,4 @@
-"""Build throwaway Git repositories for tests."""
+"""テスト用の使い捨ての Git リポジトリを作る。"""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ NOREPLY_EMAIL = "12345+tester@users.noreply.github.com"
 
 
 class GitRepo:
-    """A Git repository in a temporary directory, with helpers to commit files."""
+    """一時ディレクトリの Git リポジトリ。ファイルをコミットする補助を持つ。"""
 
     def __init__(self, path: Path) -> None:
         self.path = path
@@ -42,7 +42,7 @@ class GitRepo:
         message: str = "change",
         email: str = NOREPLY_EMAIL,
     ) -> str:
-        """Write ``files`` (an empty string deletes the file) and commit them."""
+        """``files`` を書き込み (空文字列はファイルの削除)、コミットする。"""
         for name, content in files.items():
             target = self.path / name
             if content == "" and target.exists():

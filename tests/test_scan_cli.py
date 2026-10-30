@@ -87,7 +87,7 @@ def test_scan_reports_missing_git_without_a_traceback_or_path(
 
 
 def test_scan_counts_the_checks_by_status(tmp_path: Path) -> None:
-    # Agents miscount table rows, so the report's first line uses these counts.
+    # エージェントは表の行を数え間違えるので、報告の 1 行目はこの集計を使う。
     repo = GitRepo(tmp_path)
     repo.commit({"README.md": "# demo\n"})
 
