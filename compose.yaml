@@ -1,7 +1,7 @@
 services:
   dev:
     build: .
-    # Run as the host user so that files created in the container stay editable.
+    # コンテナ内で作ったファイルを編集できるよう、ホストの利用者で動かす。
     user: "${HOST_UID:?export HOST_UID=$(id -u) first}:${HOST_GID:?export HOST_GID=$(id -g) first}"
     environment:
       HOME: /tmp

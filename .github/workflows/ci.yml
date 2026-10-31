@@ -15,8 +15,8 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        # The oldest supported version and the version in the dev container.
-        python-version: ["3.11", "3.14"]
+        # 対応する最も古い版、main が必須とする版、開発コンテナの版。
+        python-version: ["3.10", "3.11", "3.14"]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

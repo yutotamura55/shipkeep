@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Run every check that CI runs: formatting, lint, type checking, and tests.
+# CI と同じ検査 (書式、lint、型検査、テスト) をすべて実行する。
 set -euo pipefail
 cd "$(dirname "$0")/.."
 ruff format --check .

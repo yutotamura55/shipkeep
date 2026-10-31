@@ -20,6 +20,7 @@
 ## Rules specific to this repository
 
 - This repository is public. Do not write personal information (email addresses other than the GitHub noreply address, local user names, local paths) or business information in code, tests, commits, Issues, or pull requests.
+- Write code comments and docstrings in Japanese. `SKILL.md` and the text a script prints (such as `--help` and error messages) stay in English.
 - Scripts under `skills/` must stay read-only toward the repository they inspect, and must use only the Python standard library.
 - Script output and skill reports must never contain the value of a secret or of personal data. Report the location (commit, file, line) and the kind only.
 - Tests must not contain a string that looks like a real secret. Build fake secrets at run time (for example by joining parts), so that secret scanners and push protection do not flag this repository.

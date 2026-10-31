@@ -5,6 +5,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
+from gitrepo import GitRepo
 
 import scan
 
@@ -21,8 +22,10 @@ def test_scan_prints_json_for_a_git_repository(
     assert scan.main([str(tmp_path)]) == 0
 
     result = json.loads(capsys.readouterr().out)
-    assert result["schema"] == scan.SCHEMA_VERSION
-    assert result["checks"] == []
+    assert result["schema"] == 1
+    assert result["checks"], "the scan reports at least one check"
+    for check in result["checks"]:
+        assert check["status"] in {"pass", "fail", "unknown", "not_applicable"}
 
 
 def test_scan_output_does_not_contain_the_local_path(
@@ -81,3 +84,16 @@ def test_scan_reports_missing_git_without_a_traceback_or_path(
     assert "cannot run git" in captured.err
     assert "Traceback" not in captured.err
     assert str(tmp_path) not in captured.err
+
+
+def test_scan_counts_the_checks_by_status(tmp_path: Path) -> None:
+    # エージェントは表の行を数え間違えるので、報告の 1 行目はこの集計を使う。
+    repo = GitRepo(tmp_path)
+    repo.commit({"README.md": "# demo\n"})
+
+    result = scan.scan(tmp_path)
+
+    # pass: history_coverage, commit_identity, history_secrets, history_personal_data,
+    #       sensitive_files, readme; fail: license;
+    # not_applicable: denylist, env_files, github_settings.
+    assert result["counts"] == {"pass": 6, "fail": 1, "unknown": 0, "not_applicable": 3}
