@@ -22,8 +22,9 @@ throughout; the steps below add what refactoring needs on top.
    ```
 
    It prints JSON with the source files that changed most often in recent
-   commits, multiplied by their size (`score`). Exit code 2 means the path is
-   not a Git repository with commits; report the message and stop. For the top
+   commits, multiplied by their size (`score`). Exit code 2 means the script
+   could not run (wrong arguments, Git missing or failing, or no repository with
+   commits); report its message and stop. For the top
    files, measure complexity and duplication as `references/measurement.md`
    describes, then read the code. Present a few candidates to the user with the
    reason for each, and let them choose.
@@ -72,9 +73,10 @@ throughout; the steps below add what refactoring needs on top.
    6. Nothing outside the agreed scope is in the diff.
 7. **Stop** when any of these happens: the goal needs a change of behavior, the
    agreed limit is exceeded, or there is no way to check that behavior stays
-   the same. If the tests pass at that point, keep the steps done so far as the
-   result; otherwise undo the changes. Either way, report what you learned and
-   what work remains.
+   the same. Keep the steps done so far only if the tests pass and the
+   comparison inputs from step 3 still give the same outputs for them;
+   otherwise undo the changes. Either way, report what you learned and what
+   work remains.
 8. **Report** each item of step 6 as done or not verified, with the numbers
    before and after.
 

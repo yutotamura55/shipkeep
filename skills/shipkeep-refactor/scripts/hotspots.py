@@ -31,16 +31,23 @@ SOURCE_EXTENSIONS = frozenset(
 GENERATED_SUFFIXES = (".d.ts", ".min.js", ".pb.go", "_pb2.py", ".g.dart", ".freezed.dart")
 # 1 回しか変わっていないファイルは、よく変わるとは言えない。
 MIN_CHANGES = 2
-VENDORED = ("node_modules/", "vendor/", ".venv/", "venv/", "site-packages/", "third_party/")
-# git log の出力で、コミットの区切りを示す行の先頭。パスに現れない制御文字を使う。
+# 依存の置き場所と、ビルドの出力の置き場所。手で直すコードではない。
+EXCLUDED_DIRS = (
+    "node_modules/", "vendor/", ".venv/", "venv/", "site-packages/", "third_party/",
+    "dist/", "build/", "out/", "target/", ".next/", ".nuxt/", ".output/", "coverage/",
+    "generated/",
+)  # fmt: skip
+# git log の出力で、コミットの区切りを示す。パスに現れない制御文字を使う。
 COMMIT_MARK = "\x01"
+# 行数を数えるときに、1 回の git grep に渡すパスの数。引数の長さの上限を避ける。
+PATHS_PER_GREP = 200
 
 
 class HotspotError(Exception):
     """調べられない理由を、利用者に見せる英語の文で持つ。"""
 
 
-def git(root: Path, *args: str) -> str:
+def git(root: Path, *args: str, allowed: tuple[int, ...] = (0,)) -> str:
     """読み取り専用の Git コマンドを実行し、標準出力を返す。"""
     try:
         result = subprocess.run(
@@ -50,27 +57,30 @@ def git(root: Path, *args: str) -> str:
         )
     except OSError as error:
         raise HotspotError("git could not be started") from error
-    if result.returncode != 0:
+    if result.returncode not in allowed:
         raise HotspotError(f"git {args[0]} failed")
     return result.stdout.decode("utf-8", errors="replace")
 
 
 def is_source(path: str) -> bool:
-    """依存の置き場所の外にある、生成物でないソースのファイルなら真。"""
-    if any(path.startswith(d) or f"/{d}" in path for d in VENDORED):
+    """依存やビルドの出力の外にある、生成物でないソースのファイルなら真。"""
+    if any(path.startswith(d) or f"/{d}" in path for d in EXCLUDED_DIRS):
         return False
     if path.endswith(GENERATED_SUFFIXES):
         return False
     return PurePosixPath(path).suffix[1:].lower() in SOURCE_EXTENSIONS
 
 
-def change_counts(root: Path, max_commits: int) -> tuple[Counter[str], int]:
+def change_counts(top: Path, max_commits: int) -> tuple[Counter[str], int]:
     """直近のコミットでファイルごとの変更の回数を数え、数えたコミットの数も返す。"""
+    # -z で、引用符や改行を含むパスもそのまま受け取る。出力は「区切り \0 \n パス \0
+    # パス \0 ... 区切り \0 ...」の形で、各コミットの最初のパスの前に \n が付く。
     output = git(
-        root,
+        top,
         "log",
         "--no-merges",
         "--no-renames",
+        "-z",
         "--format=%x01",  # COMMIT_MARK を出す
         "--name-only",
         f"--max-count={max_commits}",
@@ -78,40 +88,57 @@ def change_counts(root: Path, max_commits: int) -> tuple[Counter[str], int]:
     )
     counts: Counter[str] = Counter()
     commits = 0
-    for line in output.splitlines():
-        if line.startswith(COMMIT_MARK):
+    first_after_mark = False
+    for token in output.split("\0"):
+        if token == COMMIT_MARK:
             commits += 1
-        elif line:
-            counts[line] += 1
+            first_after_mark = True
+            continue
+        if first_after_mark:
+            token = token.removeprefix("\n")
+            first_after_mark = False
+        if token:
+            counts[token] += 1
     return counts, commits
 
 
-def line_counts(root: Path) -> dict[str, int]:
-    """HEAD のテキストのファイルごとの行数を返す。"""
-    try:
-        output = git(root, "grep", "-I", "-z", "-c", "", "HEAD")
-    except HotspotError:
-        # 一致する行がないと git grep は 1 で終わる (空のファイルしかない場合など)。
-        return {}
+def line_counts(top: Path, paths: list[str]) -> dict[str, int]:
+    """HEAD の ``paths`` のうち、テキストのファイルの行数を返す。"""
     lines: dict[str, int] = {}
-    for record in output.splitlines():
-        name, _, count = record.partition("\0")
-        lines[name.removeprefix("HEAD:")] = int(count)
+    for start in range(0, len(paths), PATHS_PER_GREP):
+        chunk = paths[start : start + PATHS_PER_GREP]
+        # 一致する行がないと git grep は 1 で終わる (空のファイルだけの場合など)。
+        # それ以外の失敗 (壊れたオブジェクト、部分的な clone で欠けた内容) は止める。
+        output = git(
+            top, "grep", "-I", "-z", "-c", "", "HEAD", "--", *[f":(literal){p}" for p in chunk],
+            allowed=(0, 1),
+        )  # fmt: skip
+        # 出力は「HEAD:パス \0 行数 \n HEAD:パス \0 行数 \n」の形。パスに改行が
+        # 含まれても崩れないよう、\0 で分けてから行数の後の \n で次のパスに移る。
+        pieces = output.split("\0")
+        name = pieces[0]
+        for piece in pieces[1:]:
+            count, _, rest = piece.partition("\n")
+            lines[name.removeprefix("HEAD:")] = int(count)
+            name = rest
     return lines
 
 
 def hotspots(root: Path, max_commits: int = 500, limit: int = 20) -> dict[str, Any]:
     """変更の回数と行数の積が大きい順に、ソースのファイルを返す。"""
     try:
-        git(root, "rev-parse", "--verify", "--quiet", "HEAD")
+        top = Path(git(root, "rev-parse", "--show-toplevel").strip())
+        git(top, "rev-parse", "--verify", "--quiet", "HEAD")
     except HotspotError as error:
+        if str(error) == "git could not be started":
+            raise
         raise HotspotError("the path is not inside a Git repository with commits") from error
-    counts, commits = change_counts(root, max_commits)
-    lines = line_counts(root)
+    counts, commits = change_counts(top, max_commits)
+    candidates = sorted(p for p, n in counts.items() if n >= MIN_CHANGES and is_source(p))
+    lines = line_counts(top, candidates)
     files: list[dict[str, Any]] = [
         {"path": path, "changes": counts[path], "lines": size, "score": counts[path] * size}
         for path, size in lines.items()
-        if is_source(path) and counts[path] >= MIN_CHANGES
     ]
     files.sort(key=lambda item: (-item["score"], -item["changes"], item["path"]))
     return {"schema": SCHEMA_VERSION, "commits_counted": commits, "files": files[:limit]}

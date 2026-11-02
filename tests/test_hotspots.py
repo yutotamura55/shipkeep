@@ -70,12 +70,13 @@ def test_main_prints_json_without_the_local_path(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     repo = GitRepo(tmp_path)
-    repo.commit({"a.py": "x = 1\n"})
+    for i in range(2):
+        repo.commit({"a.py": f"x = {i}\n"})
 
     assert hotspots.main([str(tmp_path)]) == 0
 
     captured = capsys.readouterr()
-    assert json.loads(captured.out)["schema"] == 1
+    assert json.loads(captured.out)["files"][0]["path"] == "a.py"
     assert str(tmp_path) not in captured.out + captured.err
 
 
@@ -93,3 +94,47 @@ def test_main_rejects_a_non_positive_limit(capsys: pytest.CaptureFixture[str]) -
         hotspots.main([".", "--limit", "0"])
 
     assert exit_info.value.code == 2
+
+
+def test_a_subdirectory_reports_paths_from_the_repository_root(tmp_path: Path) -> None:
+    repo = GitRepo(tmp_path)
+    for i in range(2):
+        repo.commit({"sub/a.py": f"x = {i}\n", "b.py": f"y = {i}\n"})
+
+    assert paths(hotspots.hotspots(tmp_path / "sub")) == ["b.py", "sub/a.py"]
+
+
+@pytest.mark.parametrize("name", ['q"b.py', "tab\tname.py", "new\nline.py", "日本語.py"])
+def test_unusual_file_names_are_counted(tmp_path: Path, name: str) -> None:
+    repo = GitRepo(tmp_path)
+    for i in range(2):
+        repo.commit({name: f"x = {i}\n"})
+
+    assert paths(hotspots.hotspots(tmp_path)) == [name]
+
+
+def test_build_output_is_skipped(tmp_path: Path) -> None:
+    repo = GitRepo(tmp_path)
+    for i in range(2):
+        repo.commit({"dist/bundle.js": f"var a = {i};\n" * 100, "src/app.ts": f"x({i});\n"})
+
+    assert paths(hotspots.hotspots(tmp_path)) == ["src/app.ts"]
+
+
+def test_a_failing_git_grep_is_an_error_not_an_empty_result(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = GitRepo(tmp_path)
+    for i in range(2):
+        repo.commit({"a.py": f"x = {i}\n"})
+    real_git = hotspots.git
+
+    def failing_grep(root: Path, *args: str, allowed: tuple[int, ...] = (0,)) -> str:
+        if args[0] == "grep":
+            raise hotspots.HotspotError("git grep failed")
+        return real_git(root, *args, allowed=allowed)
+
+    monkeypatch.setattr(hotspots, "git", failing_grep)
+
+    with pytest.raises(hotspots.HotspotError):
+        hotspots.hotspots(tmp_path)

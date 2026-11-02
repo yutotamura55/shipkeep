@@ -26,6 +26,6 @@ For a language not in the table, look for the tool its official documentation or
 
 ## Hotspots
 
-`scripts/hotspots.py` ranks source files by the number of recent commits that changed them times their current line count. A file that changes often and is large is where restructuring pays off most. It skips files changed only once, generated files (such as `.d.ts`), documentation, and vendored directories.
+`scripts/hotspots.py` ranks source files by the number of recent commits that changed them times their current line count. A file that changes often and is large is where restructuring pays off most. It skips files changed only once, generated files (such as `.d.ts`), documentation, vendored directories, and build output directories (such as `dist/` and `build/`). Other generated files can still appear: check the top files before measuring them.
 
 Line count is only a proxy for size. For the top files, measure complexity with the tools above, then read the code.
