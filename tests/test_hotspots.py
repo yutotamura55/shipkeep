@@ -171,3 +171,12 @@ def test_argument_errors_do_not_echo_the_value(
         hotspots.main([".", "--max-commits", str(tmp_path)])
 
     assert str(tmp_path) not in capsys.readouterr().err
+
+
+def test_main_exits_with_2_when_git_is_missing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr("shutil.which", lambda name: None)
+
+    assert hotspots.main([str(tmp_path)]) == 2
+    assert "git could not be started" in capsys.readouterr().err

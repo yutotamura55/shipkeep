@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shutil
 import subprocess
 import sys
 from collections import Counter
@@ -48,14 +49,27 @@ class HotspotError(Exception):
     """調べられない理由を、利用者に見せる英語の文で持つ。"""
 
 
+def executable(name: str) -> str:
+    """PATH にある実行ファイルの絶対パスを返す。見つからなければ ``OSError`` を送出する。
+
+    起動の時点で探し直さず、ここで一度だけ絶対パスに決める。
+    """
+    path = shutil.which(name)
+    if path is None:
+        raise OSError(f"{name} is not on PATH")
+    return path
+
+
 def git(root: Path, *args: str, allowed: tuple[int, ...] = (0,)) -> str:
     """読み取り専用の Git コマンドを実行し、標準出力を返す。"""
     # 部分的な clone で欠けたオブジェクトを取りに行かない (取得すると対象に書き込む)。
     # この環境変数は Git 2.44 以降で働く。古い Git には partial_clone() で備える。
     env = {**os.environ, "GIT_NO_LAZY_FETCH": "1"}
+    # 引数はリストで、シェルを通さない。外から来る値は、-C のパスと、-- の後の
+    # :(literal) 付きのパスだけである。
     try:
-        result = subprocess.run(
-            ["git", "-C", str(root), "-c", "core.quotePath=false", *args],
+        result = subprocess.run(  # noqa: S603
+            [executable("git"), "-C", str(root), "-c", "core.quotePath=false", *args],
             capture_output=True,
             check=False,
             env=env,

@@ -319,3 +319,12 @@ def test_less_common_extensions_still_identify_the_language(
     repo.commit({name: "x\n"})
 
     assert [lang["id"] for lang in inventory.inventory(tmp_path)["languages"]] == [language]
+
+
+def test_main_exits_with_2_when_git_is_missing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr("shutil.which", lambda name: None)
+
+    assert inventory.main([str(tmp_path)]) == 2
+    assert "git could not be started" in capsys.readouterr().err

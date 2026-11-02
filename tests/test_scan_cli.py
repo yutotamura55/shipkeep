@@ -5,13 +5,13 @@ import subprocess
 from pathlib import Path
 
 import pytest
-from gitrepo import GitRepo
+from gitrepo import GIT, GitRepo
 
 import scan
 
 
 def git_init(path: Path, *options: str) -> None:
-    subprocess.run(["git", "init", "--quiet", *options, str(path)], check=True)
+    subprocess.run([GIT, "init", "--quiet", *options, str(path)], check=True)  # noqa: S603 (テスト用の git を固定の引数で起動する)
 
 
 def test_scan_prints_json_for_a_git_repository(
@@ -97,3 +97,12 @@ def test_scan_counts_the_checks_by_status(tmp_path: Path) -> None:
     #       sensitive_files, readme; fail: license;
     # not_applicable: denylist, env_files, github_settings.
     assert result["counts"] == {"pass": 6, "fail": 1, "unknown": 0, "not_applicable": 3}
+
+
+def test_executable_raises_when_the_command_is_not_on_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("shutil.which", lambda name: None)
+
+    with pytest.raises(OSError, match="not on PATH"):
+        scan.executable("git")
