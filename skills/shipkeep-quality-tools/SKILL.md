@@ -37,6 +37,10 @@ repository: follow `references/change-principles.md` from that point.
    | `unknown` | The script cannot tell (a language without a reference, or a repository setting such as CodeQL default setup) |
    | `not_applicable` | The aspect does not apply, with a `note` |
 
+   When `languages` is empty, `unrecognized_source_extensions` lists the most
+   common source file extensions. Decide the language from them and research
+   its tools as for a language without a reference.
+
 2. **Confirm the evidence.** The script matches names; it does not prove that a
    tool is configured or runs. Open the evidence files and check:
    - that each `pass` tool is really configured (for example, Ruff present but
@@ -98,6 +102,10 @@ State these limits in the report when they matter:
 - The inventory matches tool names in tracked configuration files. It does not
   read rule settings beyond a few patterns (such as Ruff's `S` rules) or check
   that CI actually runs a tool; step 2 covers that.
+- It skips vendored directories (`node_modules/`, `vendor/`, `.venv/` and
+  similar) and does not follow symbolic links.
+- A language found only through source files (such as a helper `.py` script in
+  a TypeScript project) is listed only when no other language was found.
 - It looks at the repository as a whole. In a monorepo with several packages,
   check each package.
 - Configuration shared by several languages (`Makefile`, workflows) counts for

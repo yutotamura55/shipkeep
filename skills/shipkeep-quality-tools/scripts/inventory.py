@@ -15,8 +15,10 @@ import argparse
 import fnmatch
 import json
 import re
+import stat
 import subprocess
 import sys
+from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any, NoReturn
@@ -37,6 +39,8 @@ class Tool:
     pattern: str = ""
     # このパターンに当たるファイルがあれば、道具が入っているとみなす。
     files: tuple[str, ...] = ()
+    # 空でなければ、本文を探すファイルをこのパターンに当たるものに限る。
+    sources: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -46,6 +50,9 @@ class Language:
     id: str
     name: str
     markers: tuple[str, ...]
+    # ソースのファイルだけで見分ける手がかり。ほかの言語がマニフェストで見つからない
+    # ときだけ使う (TypeScript のリポジトリにある補助の .py で Python とみなさない)。
+    sources: tuple[str, ...]
     # 本文を探す設定ファイル。共通の設定ファイル (SHARED_CONFIGS) にも加えて探す。
     configs: tuple[str, ...]
     aspects: dict[str, tuple[Tool, ...]]
@@ -53,14 +60,17 @@ class Language:
 
 PYTHON_CONFIGS = (
     "pyproject.toml",
+    "setup.py",
     "setup.cfg",
+    "ruff.toml",
+    ".ruff.toml",
     "tox.ini",
     "noxfile.py",
     "Pipfile",
     "*requirements*.txt",
     "*requirements*.in",
 )
-JAVASCRIPT_CONFIGS = ("package.json",)
+JAVASCRIPT_CONFIGS = ("package.json", "jest.config.*", "vitest.config.*", "vite.config.*")
 # どの言語の検査も実行しうる場所。
 SHARED_CONFIGS = (
     "Makefile",
@@ -101,7 +111,8 @@ OSV_SCANNER = Tool("osv-scanner", r"\bosv-scanner\b")
 PYTHON = Language(
     id="python",
     name="Python",
-    markers=("pyproject.toml", "setup.py", "setup.cfg", "*requirements*.txt", "Pipfile", "*.py"),
+    markers=("pyproject.toml", "setup.py", "setup.cfg", "*requirements*.txt", "Pipfile"),
+    sources=("*.py",),
     configs=PYTHON_CONFIGS,
     aspects={
         "format": (
@@ -118,8 +129,9 @@ PYTHON = Language(
             Tool("pyright", r"\b(?:based)?pyright\b", ("pyrightconfig.json",)),
         ),
         "security_lint": (
-            # Ruff の S は flake8-bandit 相当の規則。ALL は S を含む。
-            Tool("ruff S rules", r"""select\s*=\s*\[[^\]]*["'](?:S|ALL)["']"""),
+            # Ruff の S は flake8-bandit 相当の規則 (S101 のような個別の番号も含む)。
+            # ALL は S を含む。extend-select も select として当たる。
+            Tool("ruff S rules", r"""select\s*=\s*\[[^\]]*["'](?:S\d*|ALL)["']"""),
             Tool("bandit", r"\bbandit\b", (".bandit",)),
             SEMGREP,
             OPENGREP,
@@ -154,6 +166,7 @@ JAVASCRIPT = Language(
     id="javascript",
     name="JavaScript / TypeScript",
     markers=("package.json",),
+    sources=(),
     configs=JAVASCRIPT_CONFIGS,
     aspects={
         "format": (
@@ -213,7 +226,63 @@ OTHER_LANGUAGES = (
     ("swift", "Swift", ("Package.swift", "*.xcodeproj/*")),
     ("elixir", "Elixir", ("mix.exs",)),
     ("terraform", "Terraform", ("*.tf",)),
+    ("c_cpp", "C / C++", ("CMakeLists.txt", "meson.build", "*.vcxproj")),
+    ("scala", "Scala", ("build.sbt",)),
+    ("haskell", "Haskell", ("*.cabal", "stack.yaml")),
+    ("deno", "Deno", ("deno.json", "deno.jsonc")),
 )
+
+# 言語を見分けられなかったときに、エージェントへ示すソースの拡張子。
+SOURCE_EXTENSIONS = frozenset(
+    [
+        "c",
+        "cc",
+        "cpp",
+        "cxx",
+        "h",
+        "hpp",
+        "cs",
+        "go",
+        "rs",
+        "java",
+        "kt",
+        "kts",
+        "scala",
+        "swift",
+        "rb",
+        "php",
+        "py",
+        "js",
+        "mjs",
+        "cjs",
+        "ts",
+        "tsx",
+        "jsx",
+        "vue",
+        "svelte",
+        "dart",
+        "ex",
+        "exs",
+        "erl",
+        "hs",
+        "ml",
+        "fs",
+        "clj",
+        "lua",
+        "pl",
+        "r",
+        "jl",
+        "zig",
+        "nim",
+        "sh",
+        "bash",
+        "ps1",
+        "sql",
+        "tf",
+    ]
+)
+# 依存として取り込んだファイルの置き場所。手がかりから外す。
+VENDORED = ("node_modules/", "vendor/", ".venv/", "venv/", "site-packages/", "third_party/")
 
 WORKFLOW_FILES = (".github/workflows/*.yml", ".github/workflows/*.yaml")
 
@@ -223,8 +292,8 @@ REPOSITORY_ASPECTS: tuple[tuple[str, tuple[Tool, ...], bool], ...] = (
         "check_command",
         (
             Tool("scripts/check.sh", files=("scripts/check.sh",)),
-            Tool("make check", r"(?m)^check\s*:"),
-            Tool("npm run check", r'"check"\s*:\s*"'),
+            Tool("make check", r"(?m)^check\s*:", sources=("Makefile", "justfile")),
+            Tool("npm run check", r'"check"\s*:\s*"', sources=("package.json",)),
         ),
         False,
     ),
@@ -286,18 +355,26 @@ def tracked_files(root: Path) -> tuple[Path, list[str]]:
     if listing.returncode != 0:
         raise InventoryError("git ls-files failed")
     names = listing.stdout.decode("utf-8", errors="replace").split("\0")
-    return top_path, sorted(name for name in names if name)
+    return top_path, sorted(name for name in names if name and not is_vendored(name))
+
+
+def is_vendored(name: str) -> bool:
+    """依存として取り込まれた場所のファイルなら真。"""
+    return any(name.startswith(d) or f"/{d}" in name for d in VENDORED)
 
 
 def read_configs(top: Path, files: list[str]) -> dict[str, str]:
     """設定ファイルの本文を読む。大きすぎるもの、読めないものは飛ばす。"""
     texts: dict[str, str] = {}
     for name in files:
-        if "node_modules/" in name or not any(matches(name, p) for p in CONFIG_FILES):
+        if not any(matches(name, p) for p in CONFIG_FILES):
             continue
         path = top / name
         try:
-            if path.stat().st_size > MAX_CONFIG_BYTES:
+            # シンボリックリンクはたどらない。リポジトリの外のファイルや、読み終わらない
+            # デバイスを読まないため。
+            info = path.lstat()
+            if not stat.S_ISREG(info.st_mode) or info.st_size > MAX_CONFIG_BYTES:
                 continue
             texts[name] = path.read_text(encoding="utf-8", errors="replace")
         except OSError:
@@ -313,7 +390,12 @@ def find(tools: tuple[Tool, ...], files: list[str], texts: dict[str, str]) -> Ro
         hits = [f for f in files if any(matches(f, p) for p in tool.files)]
         if tool.pattern:
             regex = re.compile(tool.pattern)
-            hits += [name for name, text in texts.items() if regex.search(text)]
+            hits += [
+                name
+                for name, text in texts.items()
+                if (not tool.sources or any(matches(name, p) for p in tool.sources))
+                and regex.search(text)
+            ]
         if hits:
             if tool.name not in found:
                 found.append(tool.name)
@@ -332,8 +414,19 @@ def inventory(root: Path) -> dict[str, Any]:
 
     languages: list[Row] = []
     rows: list[Row] = []
+    found_by_manifest = {
+        language.id
+        for language in REFERENCED_LANGUAGES
+        if any(matches(f, p) for f in files for p in language.markers)
+    } | {
+        language_id
+        for language_id, _, patterns in OTHER_LANGUAGES
+        if any(matches(f, p) for f in files for p in patterns)
+    }
     for language in REFERENCED_LANGUAGES:
         markers = [f for f in files if any(matches(f, p) for p in language.markers)]
+        if not markers and not found_by_manifest:
+            markers = [f for f in files if any(matches(f, p) for p in language.sources)]
         if not markers:
             continue
         languages.append(
@@ -374,6 +467,15 @@ def inventory(root: Path) -> dict[str, Any]:
                 }
             )
 
+    unrecognized: list[str] = []
+    if not languages:
+        extensions = Counter(
+            PurePosixPath(f).suffix[1:].lower()
+            for f in files
+            if PurePosixPath(f).suffix[1:].lower() in SOURCE_EXTENSIONS
+        )
+        unrecognized = [ext for ext, _ in extensions.most_common(MAX_EVIDENCE)]
+
     uses_actions = any(matches(f, p) for f in files for p in WORKFLOW_FILES)
     for aspect, tools, needs_actions in REPOSITORY_ASPECTS:
         row = {"scope": "repository", "aspect": aspect}
@@ -397,7 +499,14 @@ def inventory(root: Path) -> dict[str, Any]:
     counts = {s: 0 for s in ("pass", "fail", "unknown", "not_applicable")}
     for row in rows:
         counts[row["status"]] += 1
-    return {"schema": SCHEMA_VERSION, "languages": languages, "counts": counts, "aspects": rows}
+    return {
+        "schema": SCHEMA_VERSION,
+        "languages": languages,
+        # 言語を見分けられなかったときの、多いソースの拡張子。エージェントが言語を判断する。
+        "unrecognized_source_extensions": unrecognized,
+        "counts": counts,
+        "aspects": rows,
+    }
 
 
 class QuietArgumentParser(argparse.ArgumentParser):

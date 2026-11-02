@@ -83,7 +83,7 @@ def test_a_typescript_project_is_read_from_package_json(tmp_path: Path) -> None:
 def test_one_language_does_not_borrow_another_languages_config(tmp_path: Path) -> None:
     package = {"devDependencies": {"jest": "^30"}, "scripts": {"cov": "jest --coverage"}}
     repo = GitRepo(tmp_path)
-    repo.commit({"package.json": json.dumps(package), "app.py": "x = 1\n"})
+    repo.commit({"package.json": json.dumps(package), "pyproject.toml": "[project]\n"})
 
     result = inventory.inventory(tmp_path)
 
@@ -179,3 +179,99 @@ def test_main_exits_with_2_outside_a_repository(
 ) -> None:
     assert inventory.main([str(tmp_path)]) == 2
     assert "not inside a Git repository" in capsys.readouterr().err
+
+
+def test_a_helper_script_does_not_make_a_typescript_project_python(tmp_path: Path) -> None:
+    repo = GitRepo(tmp_path)
+    repo.commit({"package.json": "{}", "scripts/gen.py": "print(1)\n"})
+
+    result = inventory.inventory(tmp_path)
+
+    assert [lang["id"] for lang in result["languages"]] == ["javascript"]
+
+
+def test_ruff_settings_in_ruff_toml_and_rule_codes_are_read(tmp_path: Path) -> None:
+    repo = GitRepo(tmp_path)
+    repo.commit({"ruff.toml": '[lint]\nextend-select = ["S1", "S6"]\n', "app.py": "x = 1\n"})
+
+    result = inventory.inventory(tmp_path)
+
+    assert row(result, "python", "security_lint")["tools"] == ["ruff S rules"]
+
+
+def test_tools_listed_in_setup_py_are_found(tmp_path: Path) -> None:
+    setup = "setup(extras_require={'dev': ['pytest', 'mypy', 'flake8']})\n"
+    repo = GitRepo(tmp_path)
+    repo.commit({"setup.py": setup})
+
+    result = inventory.inventory(tmp_path)
+
+    for aspect in ("lint", "type_check", "tests"):
+        assert row(result, "python", aspect)["status"] == "pass", aspect
+
+
+def test_coverage_in_a_jest_config_is_found(tmp_path: Path) -> None:
+    repo = GitRepo(tmp_path)
+    repo.commit(
+        {"package.json": "{}", "jest.config.js": "module.exports = {collectCoverage: true}\n"}
+    )
+
+    assert row(inventory.inventory(tmp_path), "javascript", "coverage")["status"] == "pass"
+
+
+def test_a_ci_job_named_check_is_not_a_check_command(tmp_path: Path) -> None:
+    repo = GitRepo(tmp_path)
+    repo.commit({".gitlab-ci.yml": "check:\n  script: echo\n", "app.py": "x = 1\n"})
+
+    result = inventory.inventory(tmp_path)
+
+    assert row(result, "repository", "check_command")["status"] == "fail"
+    assert row(result, "repository", "ci")["tools"] == ["GitLab CI"]
+
+
+def test_vendored_files_are_not_evidence(tmp_path: Path) -> None:
+    repo = GitRepo(tmp_path)
+    repo.commit(
+        {
+            "package.json": "{}",
+            "node_modules/x/.eslintrc.json": "{}",
+            "vendor/lib/helper.py": "x = 1\n",
+        }
+    )
+
+    result = inventory.inventory(tmp_path)
+
+    assert [lang["id"] for lang in result["languages"]] == ["javascript"]
+    assert row(result, "javascript", "lint")["status"] == "fail"
+
+
+def test_a_symlinked_config_is_not_followed(tmp_path: Path) -> None:
+    outside = tmp_path / "outside.txt"
+    outside.write_text("mypy\n")
+    repo = GitRepo(tmp_path / "repo")
+    (tmp_path / "repo" / "requirements.txt").symlink_to(outside)
+    repo.git("add", "requirements.txt")
+    repo.commit({"app.py": "x = 1\n"})
+
+    result = inventory.inventory(tmp_path / "repo")
+
+    assert row(result, "python", "type_check")["status"] == "fail"
+
+
+def test_cmake_projects_are_listed_as_c_cpp(tmp_path: Path) -> None:
+    repo = GitRepo(tmp_path)
+    repo.commit({"CMakeLists.txt": "project(demo)\n", "main.cpp": "int main() {}\n"})
+
+    result = inventory.inventory(tmp_path)
+
+    assert [lang["id"] for lang in result["languages"]] == ["c_cpp"]
+
+
+def test_unrecognized_sources_are_listed_by_extension(tmp_path: Path) -> None:
+    repo = GitRepo(tmp_path)
+    repo.commit({"a.lua": "", "b.lua": "x = 1\n", "c.lua": "y = 2\n", "README.md": "# x\n"})
+
+    result = inventory.inventory(tmp_path)
+
+    assert result["languages"] == []
+    assert result["unrecognized_source_extensions"] == ["lua"]

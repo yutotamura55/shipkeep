@@ -16,4 +16,4 @@ Checked on 2026-11-03. Check the current version and status of each tool before 
 Notes:
 
 - Put tool settings in `pyproject.toml` when the project has one.
-- Adding Ruff's `S` rules to an existing project usually finds `assert` in tests (`S101`). Ignoring `S101` for test files only, with a comment that explains it, is a scoped exception, not a relaxation; tell the user.
+- Adding Ruff's `S` rules to an existing project usually finds `assert` in tests (`S101`), because pytest relies on `assert`. Ignoring `S101` for test files only is an exception under principle 6 of `change-principles.md`: put it in the plan with this reason, get approval, and explain it in a configuration comment and in the pull request.
