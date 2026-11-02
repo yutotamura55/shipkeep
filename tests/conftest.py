@@ -3,5 +3,6 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-SCRIPTS = Path(__file__).resolve().parents[1] / "skills" / "shipkeep-publish-check" / "scripts"
-sys.path.insert(0, str(SCRIPTS))
+SKILLS = Path(__file__).resolve().parents[1] / "skills"
+for skill in ("shipkeep-publish-check", "shipkeep-quality-tools"):
+    sys.path.insert(0, str(SKILLS / skill / "scripts"))
