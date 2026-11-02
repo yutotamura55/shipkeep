@@ -14,8 +14,9 @@
 
 ## Checks before committing
 
-- Run `scripts/check.sh` (Ruff format and lint, mypy, pytest) before each commit, and commit only when it passes. README "開発" shows how to run it in the dev container.
+- Run `scripts/check.sh` (Ruff format and lint including the security rules, mypy, pytest with a coverage floor) before each commit, and commit only when it passes. README "開発" shows how to run it in the dev container.
 - Do not silence a failure with a suppression comment or by relaxing the configuration. When an exception is unavoidable, explain it in a code comment and in the pull request.
+- When tests raise coverage, raise `fail_under` in `pyproject.toml` to the new value rounded down; never lower it to make a change pass.
 
 ## Rules specific to this repository
 

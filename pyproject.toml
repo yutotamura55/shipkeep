@@ -10,7 +10,17 @@ line-length = 100
 target-version = "py310"
 
 [tool.ruff.lint]
-select = ["E", "F", "W", "I", "B", "UP", "SIM", "RUF"]
+select = ["E", "F", "W", "I", "B", "UP", "SIM", "RUF", "S"]
+
+[tool.ruff.lint.per-file-ignores]
+# S101：pytest は assert で結果を確かめるため、テストでは除く。
+# S603・S607：スクリプトとテストは git と gh を、利用者の PATH にあるものとして、
+# シェルを通さず引数のリストで起動する。リポジトリのパスなど外から来る値は、
+# オプションの値か `--` の後に置き、コマンドとして解釈されない。git の場所は
+# 環境ごとに違うため、絶対パスで固定しない。S603 はシェルを使わない呼び出しも
+# すべて報告する規則で、ここでの呼び出しはその確認を済ませている。
+"tests/**" = ["S101", "S603", "S607"]
+"skills/*/scripts/*.py" = ["S603", "S607"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["hotspots", "inventory", "scan"]
@@ -27,3 +37,15 @@ mypy_path = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.coverage.run]
+# skill のスクリプトだけを測る。テストのコードは対象にしない。
+source = ["skills"]
+branch = true
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true
+# 2026-11-03 に測った値 (94.66%) の小数点以下を切り捨てた基準。下回ったら失敗にする。
+# テストを足して上がったら、この値も上げる。
+fail_under = 94
