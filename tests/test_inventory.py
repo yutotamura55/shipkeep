@@ -309,3 +309,13 @@ def test_unused_code_and_unused_dependencies_are_separate(tmp_path: Path) -> Non
 
     assert row(result, "python", "unused_code")["status"] == "pass"
     assert row(result, "python", "unused_dependencies")["status"] == "fail"
+
+
+@pytest.mark.parametrize(("name", "language"), [("src/main.cxx", "c_cpp"), ("script.kts", "jvm")])
+def test_less_common_extensions_still_identify_the_language(
+    tmp_path: Path, name: str, language: str
+) -> None:
+    repo = GitRepo(tmp_path)
+    repo.commit({name: "x\n"})
+
+    assert [lang["id"] for lang in inventory.inventory(tmp_path)["languages"]] == [language]

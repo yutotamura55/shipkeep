@@ -215,7 +215,12 @@ REFERENCED_LANGUAGES = (PYTHON, JAVASCRIPT)
 OTHER_LANGUAGES: tuple[tuple[str, str, tuple[str, ...], tuple[str, ...]], ...] = (
     ("go", "Go", ("go.mod",), ("go",)),
     ("rust", "Rust", ("Cargo.toml",), ("rs",)),
-    ("jvm", "Java / Kotlin (JVM)", ("build.gradle", "build.gradle.kts", "pom.xml"), ("java", "kt")),
+    (
+        "jvm",
+        "Java / Kotlin (JVM)",
+        ("build.gradle", "build.gradle.kts", "pom.xml"),
+        ("java", "kt", "kts"),
+    ),
     ("php", "PHP", ("composer.json",), ("php",)),
     ("csharp", "C#", ("*.csproj", "*.sln"), ("cs",)),
     ("ruby", "Ruby", ("Gemfile",), ("rb",)),
@@ -227,7 +232,7 @@ OTHER_LANGUAGES: tuple[tuple[str, str, tuple[str, ...], tuple[str, ...]], ...] =
         "c_cpp",
         "C / C++",
         ("CMakeLists.txt", "meson.build", "*.vcxproj"),
-        ("c", "cc", "cpp", "h", "hpp"),
+        ("c", "cc", "cpp", "cxx", "h", "hh", "hpp", "hxx"),
     ),
     ("scala", "Scala", ("build.sbt",), ("scala",)),
     ("haskell", "Haskell", ("*.cabal", "stack.yaml"), ("hs",)),
