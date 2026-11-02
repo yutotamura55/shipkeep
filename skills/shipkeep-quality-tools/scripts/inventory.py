@@ -14,6 +14,7 @@ from __future__ import annotations
 import argparse
 import fnmatch
 import json
+import os
 import re
 import shutil
 import stat
@@ -305,7 +306,8 @@ def executable(name: str) -> str:
     path = shutil.which(name)
     if path is None:
         raise OSError(f"{name} is not on PATH")
-    return path
+    # PATH に相対のディレクトリや空の項目があると、which は相対パスや名前だけを返す。
+    return os.path.abspath(path)
 
 
 def tracked_files(root: Path) -> tuple[Path, list[str]]:

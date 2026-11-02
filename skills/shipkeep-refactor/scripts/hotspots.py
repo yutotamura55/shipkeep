@@ -57,7 +57,8 @@ def executable(name: str) -> str:
     path = shutil.which(name)
     if path is None:
         raise OSError(f"{name} is not on PATH")
-    return path
+    # PATH に相対のディレクトリや空の項目があると、which は相対パスや名前だけを返す。
+    return os.path.abspath(path)
 
 
 def git(root: Path, *args: str, allowed: tuple[int, ...] = (0,)) -> str:
@@ -65,8 +66,8 @@ def git(root: Path, *args: str, allowed: tuple[int, ...] = (0,)) -> str:
     # 部分的な clone で欠けたオブジェクトを取りに行かない (取得すると対象に書き込む)。
     # この環境変数は Git 2.44 以降で働く。古い Git には partial_clone() で備える。
     env = {**os.environ, "GIT_NO_LAZY_FETCH": "1"}
-    # 引数はリストで、シェルを通さない。外から来る値は、-C のパスと、-- の後の
-    # :(literal) 付きのパスだけである。
+    # 引数はリストで、シェルを通さない。外から来る値は、-C のパス、-- の後の
+    # :(literal) 付きのパス、整数として検査した --max-count の値だけである。
     try:
         result = subprocess.run(  # noqa: S603
             [executable("git"), "-C", str(root), "-c", "core.quotePath=false", *args],

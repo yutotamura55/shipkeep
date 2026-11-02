@@ -180,3 +180,16 @@ def test_main_exits_with_2_when_git_is_missing(
 
     assert hotspots.main([str(tmp_path)]) == 2
     assert "git could not be started" in capsys.readouterr().err
+
+
+def test_executable_returns_an_absolute_path_for_a_relative_path_entry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    tool = tmp_path / "bin" / "demo-tool"
+    tool.parent.mkdir()
+    tool.write_text("#!/bin/sh\n")
+    tool.chmod(0o755)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("PATH", "bin")
+
+    assert hotspots.executable("demo-tool") == str(tool)

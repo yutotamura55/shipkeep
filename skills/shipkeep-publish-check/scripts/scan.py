@@ -15,6 +15,7 @@ import argparse
 import ast
 import fnmatch
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -228,7 +229,8 @@ def executable(name: str) -> str:
     path = shutil.which(name)
     if path is None:
         raise OSError(f"{name} is not on PATH")
-    return path
+    # PATH に相対のディレクトリや空の項目があると、which は相対パスや名前だけを返す。
+    return os.path.abspath(path)
 
 
 def git_command(root: Path, *args: str) -> list[str]:
