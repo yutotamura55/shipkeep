@@ -13,7 +13,7 @@ Checked on 2026-11-03. Before using a tool, check that it supports the target la
 | PHP | PHPMD | jscpd |
 | C# | .NET code analysis rule `CA1502` | jscpd |
 
-For a language not in the table, research a tool as the quality tools skill describes for languages without a reference, and cite the source.
+For a language not in the table, look for the tool its official documentation or main community recommends today, check that it is maintained, and cite the source and date. Lizard and jscpd support many languages and are a reasonable first try.
 
 ## How to read the numbers
 
