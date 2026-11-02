@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 from collections import Counter
@@ -49,17 +50,40 @@ class HotspotError(Exception):
 
 def git(root: Path, *args: str, allowed: tuple[int, ...] = (0,)) -> str:
     """読み取り専用の Git コマンドを実行し、標準出力を返す。"""
+    # 部分的な clone で欠けたオブジェクトを取りに行かない (取得すると対象に書き込む)。
+    # この環境変数は Git 2.44 以降で働く。古い Git には partial_clone() で備える。
+    env = {**os.environ, "GIT_NO_LAZY_FETCH": "1"}
     try:
         result = subprocess.run(
             ["git", "-C", str(root), "-c", "core.quotePath=false", *args],
             capture_output=True,
             check=False,
+            env=env,
         )
     except OSError as error:
         raise HotspotError("git could not be started") from error
     if result.returncode not in allowed:
         raise HotspotError(f"git {args[0]} failed")
-    return result.stdout.decode("utf-8", errors="replace")
+    # UTF-8 でないパスも元のバイト列に戻せるよう surrogateescape で読む。
+    # subprocess は引数を同じ規則でバイト列に戻すため、パスをそのまま Git に渡せる。
+    return result.stdout.decode("utf-8", errors="surrogateescape")
+
+
+def shown(path: str) -> str:
+    """JSON に出せる形のパス。UTF-8 でないバイトは置換文字にする。"""
+    return path.encode("utf-8", errors="surrogateescape").decode("utf-8", errors="replace")
+
+
+def partial_clone(top: Path) -> bool:
+    """部分的な clone (欠けたオブジェクトを後から取りに行く) なら真。"""
+    output = git(
+        top,
+        "config",
+        "--get-regexp",
+        r"^(extensions\.partialclone|remote\..*\.promisor)$",
+        allowed=(0, 1),
+    )
+    return bool(output.strip())
 
 
 def is_source(path: str) -> bool:
@@ -133,11 +157,17 @@ def hotspots(root: Path, max_commits: int = 500, limit: int = 20) -> dict[str, A
         if str(error) == "git could not be started":
             raise
         raise HotspotError("the path is not inside a Git repository with commits") from error
+    if partial_clone(top):
+        # 欠けたオブジェクトを読むと Git が取りに行き、対象のリポジトリに書き込む。
+        raise HotspotError(
+            "this is a partial clone; reading history could fetch objects into it. "
+            "Run the script on a full clone"
+        )
     counts, commits = change_counts(top, max_commits)
     candidates = sorted(p for p, n in counts.items() if n >= MIN_CHANGES and is_source(p))
     lines = line_counts(top, candidates)
     files: list[dict[str, Any]] = [
-        {"path": path, "changes": counts[path], "lines": size, "score": counts[path] * size}
+        {"path": shown(path), "changes": counts[path], "lines": size, "score": counts[path] * size}
         for path, size in lines.items()
     ]
     files.sort(key=lambda item: (-item["score"], -item["changes"], item["path"]))
@@ -148,8 +178,9 @@ class QuietArgumentParser(argparse.ArgumentParser):
     """引数の誤りを、使い方とともに終了コード 2 で知らせる。"""
 
     def error(self, message: str) -> NoReturn:
+        # argparse の文は、渡された値 (誤って渡したパスなど) をそのまま含むため出さない。
         self.print_usage(sys.stderr)
-        print(f"error: {message}", file=sys.stderr)
+        print("error: invalid arguments; see --help", file=sys.stderr)
         raise SystemExit(2)
 
 

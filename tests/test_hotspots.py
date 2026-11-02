@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Any
 
@@ -138,3 +139,35 @@ def test_a_failing_git_grep_is_an_error_not_an_empty_result(
 
     with pytest.raises(hotspots.HotspotError):
         hotspots.hotspots(tmp_path)
+
+
+def test_a_non_utf8_file_name_is_counted(tmp_path: Path) -> None:
+    repo = GitRepo(tmp_path)
+    raw = os.fsdecode(b"caf\xe9.py")
+    for i in range(2):
+        (tmp_path / raw).write_text(f"x = {i}\n")
+        repo.git("add", "--", raw)
+        repo.commit({})
+
+    result = hotspots.hotspots(tmp_path)
+
+    assert paths(result) == ["caf\ufffd.py"]
+    json.dumps(result, ensure_ascii=False).encode("utf-8")
+
+
+def test_a_partial_clone_is_refused(tmp_path: Path) -> None:
+    repo = GitRepo(tmp_path)
+    repo.commit({"a.py": "x = 1\n"})
+    repo.git("config", "extensions.partialClone", "origin")
+
+    with pytest.raises(hotspots.HotspotError, match="partial clone"):
+        hotspots.hotspots(tmp_path)
+
+
+def test_argument_errors_do_not_echo_the_value(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    with pytest.raises(SystemExit):
+        hotspots.main([".", "--max-commits", str(tmp_path)])
+
+    assert str(tmp_path) not in capsys.readouterr().err
