@@ -74,7 +74,7 @@ def test_a_typescript_project_is_read_from_package_json(tmp_path: Path) -> None:
     result = inventory.inventory(tmp_path)
 
     assert [lang["id"] for lang in result["languages"]] == ["javascript"]
-    for aspect in ("lint", "type_check", "tests", "coverage", "unused_code"):
+    for aspect in ("lint", "type_check", "tests", "coverage", "unused_code", "unused_dependencies"):
         assert row(result, "javascript", aspect)["status"] == "pass", aspect
     assert row(result, "javascript", "format")["status"] == "fail"
     assert row(result, "repository", "check_command")["tools"] == ["npm run check"]
@@ -98,7 +98,13 @@ def test_a_language_without_reference_is_unknown_and_flagged(tmp_path: Path) -> 
     result = inventory.inventory(tmp_path)
 
     assert result["languages"] == [
-        {"id": "go", "name": "Go", "reference": False, "evidence": ["go.mod"]}
+        {
+            "id": "go",
+            "name": "Go",
+            "reference": False,
+            "detected_by": "manifest",
+            "evidence": ["go.mod"],
+        }
     ]
     assert row(result, "go", "lint")["status"] == "unknown"
 
@@ -181,13 +187,15 @@ def test_main_exits_with_2_outside_a_repository(
     assert "not inside a Git repository" in capsys.readouterr().err
 
 
-def test_a_helper_script_does_not_make_a_typescript_project_python(tmp_path: Path) -> None:
+def test_a_language_found_only_by_sources_is_marked(tmp_path: Path) -> None:
     repo = GitRepo(tmp_path)
-    repo.commit({"package.json": "{}", "scripts/gen.py": "print(1)\n"})
+    repo.commit({"package.json": "{}", "backend/app.py": "print(1)\n", "native/main.lua": ""})
 
     result = inventory.inventory(tmp_path)
 
-    assert [lang["id"] for lang in result["languages"]] == ["javascript"]
+    found = {lang["id"]: lang["detected_by"] for lang in result["languages"]}
+    assert found == {"python": "sources", "javascript": "manifest"}
+    assert result["unrecognized_source_extensions"] == ["lua"]
 
 
 def test_ruff_settings_in_ruff_toml_and_rule_codes_are_read(tmp_path: Path) -> None:
@@ -275,3 +283,29 @@ def test_unrecognized_sources_are_listed_by_extension(tmp_path: Path) -> None:
 
     assert result["languages"] == []
     assert result["unrecognized_source_extensions"] == ["lua"]
+
+
+def test_a_symlinked_parent_directory_is_not_followed(tmp_path: Path) -> None:
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "ci.yml").write_text("run: zizmor .\n")
+    repo = GitRepo(tmp_path / "repo")
+    repo.commit({".github/workflows/ci.yml": "jobs: {}\n"})
+    workflows = tmp_path / "repo" / ".github" / "workflows"
+    (workflows / "ci.yml").unlink()
+    workflows.rmdir()
+    workflows.symlink_to(outside, target_is_directory=True)
+
+    result = inventory.inventory(tmp_path / "repo")
+
+    assert row(result, "repository", "workflow_security")["status"] == "fail"
+
+
+def test_unused_code_and_unused_dependencies_are_separate(tmp_path: Path) -> None:
+    repo = GitRepo(tmp_path)
+    repo.commit({"pyproject.toml": '[dependency-groups]\ndev = ["vulture"]\n'})
+
+    result = inventory.inventory(tmp_path)
+
+    assert row(result, "python", "unused_code")["status"] == "pass"
+    assert row(result, "python", "unused_dependencies")["status"] == "fail"

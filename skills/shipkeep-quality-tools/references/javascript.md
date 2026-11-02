@@ -10,7 +10,8 @@ Checked on 2026-11-03. Check the current version and status of each tool before 
 | Security lint | Semgrep/Opengrep from the common layer | Research ESLint security plugins at install time; their status was not verified |
 | Tests | Vitest | Jest, `node --test`, Playwright for end-to-end tests |
 | Coverage | Vitest coverage (`@vitest/coverage-v8`), with a Cobertura report for diff coverage | c8, nyc, Jest `--coverage` |
-| Unused code and dependencies | Knip (unused files, exports, and dependencies) | depcheck. Knip often reports exported types that are kept on purpose: review its findings |
+| Unused code | Knip (unused files and exports) | Knip often reports exported types that are kept on purpose: review its findings |
+| Unused dependencies | Knip (the same tool covers both) | depcheck |
 | Dependency audit | `npm audit` (or the package manager's equivalent) | OSV-Scanner |
 
 Notes:

@@ -50,9 +50,8 @@ class Language:
     id: str
     name: str
     markers: tuple[str, ...]
-    # ソースのファイルだけで見分ける手がかり。ほかの言語がマニフェストで見つからない
-    # ときだけ使う (TypeScript のリポジトリにある補助の .py で Python とみなさない)。
-    sources: tuple[str, ...]
+    # ソースのファイルの拡張子。マニフェストがなくても、これがあれば言語として挙げる。
+    extensions: tuple[str, ...]
     # 本文を探す設定ファイル。共通の設定ファイル (SHARED_CONFIGS) にも加えて探す。
     configs: tuple[str, ...]
     aspects: dict[str, tuple[Tool, ...]]
@@ -95,6 +94,7 @@ LANGUAGE_ASPECTS = (
     "tests",
     "coverage",
     "unused_code",
+    "unused_dependencies",
     "dependency_audit",
 )
 
@@ -104,6 +104,7 @@ JAVASCRIPT_TEST_FILES = tuple(
     for ext in ("js", "mjs", "cjs", "jsx", "ts", "mts", "cts", "tsx")
 )
 
+KNIP = Tool("knip", r"\bknip\b", ("knip.json", "knip.jsonc", "knip.config.*"))
 SEMGREP = Tool("semgrep", r"\bsemgrep\b")
 OPENGREP = Tool("opengrep", r"\bopengrep\b")
 OSV_SCANNER = Tool("osv-scanner", r"\bosv-scanner\b")
@@ -112,7 +113,7 @@ PYTHON = Language(
     id="python",
     name="Python",
     markers=("pyproject.toml", "setup.py", "setup.cfg", "*requirements*.txt", "Pipfile"),
-    sources=("*.py",),
+    extensions=("py",),
     configs=PYTHON_CONFIGS,
     aspects={
         "format": (
@@ -151,10 +152,8 @@ PYTHON = Language(
                 (".coveragerc",),
             ),
         ),
-        "unused_code": (
-            Tool("vulture", r"\bvulture\b"),
-            Tool("deptry", r"\bdeptry\b"),
-        ),
+        "unused_code": (Tool("vulture", r"\bvulture\b"),),
+        "unused_dependencies": (Tool("deptry", r"\bdeptry\b"),),
         "dependency_audit": (
             Tool("pip-audit", r"\bpip-audit\b"),
             OSV_SCANNER,
@@ -166,7 +165,7 @@ JAVASCRIPT = Language(
     id="javascript",
     name="JavaScript / TypeScript",
     markers=("package.json",),
-    sources=(),
+    extensions=("js", "mjs", "cjs", "jsx", "ts", "mts", "cts", "tsx", "vue", "svelte"),
     configs=JAVASCRIPT_CONFIGS,
     aspects={
         "format": (
@@ -201,10 +200,8 @@ JAVASCRIPT = Language(
             Tool("nyc", r"\bnyc\b"),
             Tool("--coverage", r"--coverage\b|collectCoverage"),
         ),
-        "unused_code": (
-            Tool("knip", r"\bknip\b", ("knip.json", "knip.jsonc", "knip.config.*")),
-            Tool("depcheck", r"\bdepcheck\b"),
-        ),
+        "unused_code": (KNIP,),
+        "unused_dependencies": (KNIP, Tool("depcheck", r"\bdepcheck\b")),
         "dependency_audit": (
             Tool("npm audit", r"\b(?:npm|pnpm|yarn|bun) audit\b"),
             OSV_SCANNER,
@@ -215,71 +212,32 @@ JAVASCRIPT = Language(
 REFERENCED_LANGUAGES = (PYTHON, JAVASCRIPT)
 
 # 参照を持たない言語。見分けるだけで、道具はエージェントがその場で調べる。
-OTHER_LANGUAGES = (
-    ("go", "Go", ("go.mod",)),
-    ("rust", "Rust", ("Cargo.toml",)),
-    ("jvm", "Java / Kotlin (JVM)", ("build.gradle", "build.gradle.kts", "pom.xml")),
-    ("php", "PHP", ("composer.json",)),
-    ("csharp", "C#", ("*.csproj", "*.sln")),
-    ("ruby", "Ruby", ("Gemfile",)),
-    ("dart", "Dart / Flutter", ("pubspec.yaml",)),
-    ("swift", "Swift", ("Package.swift", "*.xcodeproj/*")),
-    ("elixir", "Elixir", ("mix.exs",)),
-    ("terraform", "Terraform", ("*.tf",)),
-    ("c_cpp", "C / C++", ("CMakeLists.txt", "meson.build", "*.vcxproj")),
-    ("scala", "Scala", ("build.sbt",)),
-    ("haskell", "Haskell", ("*.cabal", "stack.yaml")),
-    ("deno", "Deno", ("deno.json", "deno.jsonc")),
+OTHER_LANGUAGES: tuple[tuple[str, str, tuple[str, ...], tuple[str, ...]], ...] = (
+    ("go", "Go", ("go.mod",), ("go",)),
+    ("rust", "Rust", ("Cargo.toml",), ("rs",)),
+    ("jvm", "Java / Kotlin (JVM)", ("build.gradle", "build.gradle.kts", "pom.xml"), ("java", "kt")),
+    ("php", "PHP", ("composer.json",), ("php",)),
+    ("csharp", "C#", ("*.csproj", "*.sln"), ("cs",)),
+    ("ruby", "Ruby", ("Gemfile",), ("rb",)),
+    ("dart", "Dart / Flutter", ("pubspec.yaml",), ("dart",)),
+    ("swift", "Swift", ("Package.swift", "*.xcodeproj/*"), ("swift",)),
+    ("elixir", "Elixir", ("mix.exs",), ("ex", "exs")),
+    ("terraform", "Terraform", (), ("tf",)),
+    (
+        "c_cpp",
+        "C / C++",
+        ("CMakeLists.txt", "meson.build", "*.vcxproj"),
+        ("c", "cc", "cpp", "h", "hpp"),
+    ),
+    ("scala", "Scala", ("build.sbt",), ("scala",)),
+    ("haskell", "Haskell", ("*.cabal", "stack.yaml"), ("hs",)),
+    ("deno", "Deno", ("deno.json", "deno.jsonc"), ()),
 )
 
-# 言語を見分けられなかったときに、エージェントへ示すソースの拡張子。
-SOURCE_EXTENSIONS = frozenset(
-    [
-        "c",
-        "cc",
-        "cpp",
-        "cxx",
-        "h",
-        "hpp",
-        "cs",
-        "go",
-        "rs",
-        "java",
-        "kt",
-        "kts",
-        "scala",
-        "swift",
-        "rb",
-        "php",
-        "py",
-        "js",
-        "mjs",
-        "cjs",
-        "ts",
-        "tsx",
-        "jsx",
-        "vue",
-        "svelte",
-        "dart",
-        "ex",
-        "exs",
-        "erl",
-        "hs",
-        "ml",
-        "fs",
-        "clj",
-        "lua",
-        "pl",
-        "r",
-        "jl",
-        "zig",
-        "nim",
-        "sh",
-        "bash",
-        "ps1",
-        "sql",
-        "tf",
-    ]
+# 表にない言語のソースの拡張子。見つかれば、エージェントが言語を判断する。
+# シェルや SQL は多くのリポジトリに補助としてあるため含めない。
+UNLISTED_EXTENSIONS = frozenset(
+    ("erl", "ml", "fs", "clj", "lua", "pl", "r", "jl", "zig", "nim", "cr", "v", "groovy", "m")
 )
 # 依存として取り込んだファイルの置き場所。手がかりから外す。
 VENDORED = ("node_modules/", "vendor/", ".venv/", "venv/", "site-packages/", "third_party/")
@@ -371,8 +329,14 @@ def read_configs(top: Path, files: list[str]) -> dict[str, str]:
             continue
         path = top / name
         try:
-            # シンボリックリンクはたどらない。リポジトリの外のファイルや、読み終わらない
-            # デバイスを読まないため。
+            # パスのどの部分のシンボリックリンクもたどらない。リポジトリの外のファイルや、
+            # 読み終わらないデバイスを読まないため。
+            parts = [
+                top / Path(*PurePosixPath(name).parts[: i + 1])
+                for i in range(len(PurePosixPath(name).parts))
+            ]
+            if any(part.is_symlink() for part in parts):
+                continue
             info = path.lstat()
             if not stat.S_ISREG(info.st_mode) or info.st_size > MAX_CONFIG_BYTES:
                 continue
@@ -414,19 +378,18 @@ def inventory(root: Path) -> dict[str, Any]:
 
     languages: list[Row] = []
     rows: list[Row] = []
-    found_by_manifest = {
-        language.id
-        for language in REFERENCED_LANGUAGES
-        if any(matches(f, p) for f in files for p in language.markers)
-    } | {
-        language_id
-        for language_id, _, patterns in OTHER_LANGUAGES
-        if any(matches(f, p) for f in files for p in patterns)
-    }
+    extensions = Counter(PurePosixPath(f).suffix[1:].lower() for f in files)
+
+    def detect(markers: tuple[str, ...], exts: tuple[str, ...]) -> tuple[list[str], str]:
+        """マニフェストか、ソースのファイルで言語を見分け、根拠と見分け方を返す。"""
+        manifests = [f for f in files if any(matches(f, p) for p in markers)]
+        if manifests:
+            return manifests, "manifest"
+        sources = [f for f in files if PurePosixPath(f).suffix[1:].lower() in exts]
+        return sources, "sources"
+
     for language in REFERENCED_LANGUAGES:
-        markers = [f for f in files if any(matches(f, p) for p in language.markers)]
-        if not markers and not found_by_manifest:
-            markers = [f for f in files if any(matches(f, p) for p in language.sources)]
+        markers, detected_by = detect(language.markers, language.extensions)
         if not markers:
             continue
         languages.append(
@@ -434,6 +397,7 @@ def inventory(root: Path) -> dict[str, Any]:
                 "id": language.id,
                 "name": language.name,
                 "reference": True,
+                "detected_by": detected_by,
                 "evidence": markers[:MAX_EVIDENCE],
             }
         )
@@ -443,8 +407,8 @@ def inventory(root: Path) -> dict[str, Any]:
             row: Row = {"scope": language.id, "aspect": aspect}
             row.update(find(language.aspects[aspect], files, own_texts))
             rows.append(row)
-    for language_id, name, patterns in OTHER_LANGUAGES:
-        markers = [f for f in files if any(matches(f, p) for p in patterns)]
+    for language_id, name, patterns, exts in OTHER_LANGUAGES:
+        markers, detected_by = detect(patterns, exts)
         if not markers:
             continue
         languages.append(
@@ -452,6 +416,7 @@ def inventory(root: Path) -> dict[str, Any]:
                 "id": language_id,
                 "name": name,
                 "reference": False,
+                "detected_by": detected_by,
                 "evidence": markers[:MAX_EVIDENCE],
             }
         )
@@ -467,14 +432,9 @@ def inventory(root: Path) -> dict[str, Any]:
                 }
             )
 
-    unrecognized: list[str] = []
-    if not languages:
-        extensions = Counter(
-            PurePosixPath(f).suffix[1:].lower()
-            for f in files
-            if PurePosixPath(f).suffix[1:].lower() in SOURCE_EXTENSIONS
-        )
-        unrecognized = [ext for ext, _ in extensions.most_common(MAX_EVIDENCE)]
+    unrecognized = [ext for ext, _ in extensions.most_common() if ext in UNLISTED_EXTENSIONS][
+        :MAX_EVIDENCE
+    ]
 
     uses_actions = any(matches(f, p) for f in files for p in WORKFLOW_FILES)
     for aspect, tools, needs_actions in REPOSITORY_ASPECTS:
@@ -502,7 +462,7 @@ def inventory(root: Path) -> dict[str, Any]:
     return {
         "schema": SCHEMA_VERSION,
         "languages": languages,
-        # 言語を見分けられなかったときの、多いソースの拡張子。エージェントが言語を判断する。
+        # 表にない言語のソースの拡張子 (多い順)。エージェントが言語を判断する。
         "unrecognized_source_extensions": unrecognized,
         "counts": counts,
         "aspects": rows,

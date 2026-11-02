@@ -10,7 +10,8 @@ Checked on 2026-11-03. Check the current version and status of each tool before 
 | Security lint | Ruff `S` rules (flake8-bandit equivalent), plus Semgrep/Opengrep from the common layer | Bandit |
 | Tests | pytest | unittest (standard library) |
 | Coverage | pytest-cov (`--cov`, `--cov-fail-under=<floor>`, `--cov-report=xml` for diff coverage) | coverage.py directly |
-| Unused code and dependencies | vulture for unused code | vulture reports with a confidence score and misses or misreports code that is called dynamically: review its findings. For unused dependencies, research the current tool (deptry is a candidate; not verified) |
+| Unused code | vulture | vulture reports with a confidence score and misses or misreports code that is called dynamically: review its findings |
+| Unused dependencies | Research the current tool | deptry is a candidate; its status was not verified |
 | Dependency audit | pip-audit | OSV-Scanner |
 
 Notes:
