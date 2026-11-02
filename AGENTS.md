@@ -4,7 +4,7 @@
 
 The assistant may merge a pull request into the repository's default branch (check it with `gh repo view --json defaultBranchRef`) itself when all of these hold:
 
-1. Every required CI check passed. When CI cannot run, do not merge.
+1. At least one CI check ran on the pull request's head commit, and every check passed. When CI cannot run, or no check ran, do not merge.
 2. The self-review and an independent review by a model of a different family are done, their Important findings are fixed, and the fixes were reviewed again.
 3. The pull request targets the default branch. A pull request built on another pull request's branch waits until that one is merged and its base is changed to the default branch.
 4. The change is not "very high risk" (below).
@@ -26,9 +26,9 @@ A change is **very high risk** when it cannot be undone, harms people or money o
 - a new dependency, unless all of these hold: it exists in the official registry under exactly that name; it is established and maintained; its license is compatible; it runs no install script, or its script was read and found safe; its version and hash are pinned in the lockfile; and it passes the dependency audit. Lockfile-only changes count as dependency changes;
 - a major dependency update, unless every breaking change in its changelog was traced to the code that uses it and verified by tests or by running it. When that investigation is large, do the update in a separate Issue.
 
-Judge the risk as the highest of three judgments, none of which can lower another: the path and content rules (`pr_risk.py` in the maintainer's development rules), the implementing agent, and the different-family reviewer, which must give file, line, and reason. When the reviewer cannot run, treat the change as very high risk. Write the three judgments in the pull request body. When in doubt, treat the change as very high risk.
+Judge the risk as the highest of three judgments, none of which can lower another: the path and content rules, the implementing agent, and the different-family reviewer, which must give file, line, and reason. The path and content rules come from the maintainer's `pr_risk.py`, which lives outside this repository; when it is not available, check every changed path (both sides of a rename) and the changed lines of every file, including migrations and lockfiles, against the list above by hand, and say so in the pull request body. When the reviewer cannot run, treat the change as very high risk. Write the three judgments in the pull request body. When in doubt, treat the change as very high risk.
 
-Leave a very high risk pull request for the user to merge, and say why at the top of its body.
+Leave a very high risk pull request for the user to merge, and say why at the top of its body. Only an explicit request from the user to merge that specific pull request authorizes the assistant to merge it; general instructions such as "continue", "proceed", "OK", 「続けてください」, or 「進めてください」 do not.
 
 Never push directly to the default branch, enable auto-merge, enqueue a pull request, or bypass branch protection (for example with `gh pr merge --admin`). Use the merge method this repository already uses. After merging, confirm that CI on the default branch passed and, where a merge deploys to production, that the deployment succeeded; if either fails, open a revert pull request and merge it under the same rules. Report every merged pull request to the user with its URL, its open choices, and the risk judgments.
 
