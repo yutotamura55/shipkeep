@@ -117,6 +117,7 @@ def test_workflow_checks_are_not_applicable_without_github_actions(tmp_path: Pat
 
     assert row(result, "repository", "workflow_lint")["status"] == "not_applicable"
     assert row(result, "repository", "workflow_security")["status"] == "not_applicable"
+    assert row(result, "repository", "dependency_review")["status"] == "not_applicable"
 
 
 def test_workflow_tools_are_found_in_workflows(tmp_path: Path) -> None:
@@ -125,13 +126,22 @@ def test_workflow_tools_are_found_in_workflows(tmp_path: Path) -> None:
         "      - run: actionlint\n"
         "      - run: zizmor .\n"
         "      - uses: github/codeql-action/init@0000000000000000000000000000000000000000\n"
+        "      - uses: actions/dependency-review-action@1111111111111111111111111111111111111111\n"
     )
     repo = GitRepo(tmp_path)
     repo.commit({".github/workflows/ci.yml": workflow, ".github/dependabot.yml": "version: 2\n"})
 
     result = inventory.inventory(tmp_path)
 
-    for aspect in ("ci", "workflow_lint", "workflow_security", "codeql", "dependency_updates"):
+    aspects = (
+        "ci",
+        "workflow_lint",
+        "workflow_security",
+        "codeql",
+        "dependency_updates",
+        "dependency_review",
+    )
+    for aspect in aspects:
         assert row(result, "repository", aspect)["status"] == "pass", aspect
 
 
@@ -319,3 +329,11 @@ def test_less_common_extensions_still_identify_the_language(
     repo.commit({name: "x\n"})
 
     assert [lang["id"] for lang in inventory.inventory(tmp_path)["languages"]] == [language]
+
+
+def test_dependency_review_fails_when_workflows_lack_it(tmp_path: Path) -> None:
+    repo = GitRepo(tmp_path)
+    workflow = "jobs:\n  test:\n    steps:\n      - uses: actions/dependency-review\n"
+    repo.commit({".github/workflows/ci.yml": workflow})
+
+    assert row(inventory.inventory(tmp_path), "repository", "dependency_review")["status"] == "fail"
