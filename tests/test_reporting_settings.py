@@ -290,3 +290,60 @@ def test_gh_api_returns_none_without_gh(tmp_path: Path, monkeypatch: pytest.Monk
     monkeypatch.setenv("PATH", str(tmp_path))
 
     assert scan.gh_api("repos/octo/demo") is None
+
+
+@pytest.mark.parametrize("body", [{}, {"enabled": None}, {"enabled": "true"}])
+def test_private_reporting_is_unknown_when_the_answer_has_no_boolean(
+    tmp_path: Path, body: dict[str, Any]
+) -> None:
+    repo_with_remote(tmp_path)
+    api = FakeApi(ready_responses(**{"private-vulnerability-reporting": (200, body)}))
+
+    assert github_checks(tmp_path, api)["private_reporting"]["status"] == "unknown"
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"default_workflow_permissions": "read"},
+        {"default_workflow_permissions": "read", "can_approve_pull_request_reviews": None},
+        {"default_workflow_permissions": "read", "can_approve_pull_request_reviews": "false"},
+        {"can_approve_pull_request_reviews": False},
+        {"default_workflow_permissions": "admin", "can_approve_pull_request_reviews": False},
+    ],
+)
+def test_workflow_token_does_not_pass_on_a_missing_or_odd_value(
+    tmp_path: Path, body: dict[str, Any]
+) -> None:
+    repo_with_remote(tmp_path)
+    api = FakeApi(ready_responses(**{"actions/permissions/workflow": (200, body)}))
+
+    assert github_checks(tmp_path, api)["workflow_token"]["status"] == "unknown"
+
+
+def test_workflow_token_still_fails_when_only_one_value_is_known(tmp_path: Path) -> None:
+    """書き込みできると分かれば、もう一方の値がなくても指摘する。"""
+    repo_with_remote(tmp_path)
+    api = FakeApi(
+        ready_responses(
+            **{"actions/permissions/workflow": (200, {"default_workflow_permissions": "write"})}
+        )
+    )
+
+    found = github_checks(tmp_path, api)["workflow_token"]
+
+    assert found["status"] == "fail"
+    assert [f["kind"] for f in found["findings"]] == ["workflow_token_writable"]
+
+
+@pytest.mark.parametrize("visibility", [None, "public"])
+def test_private_reporting_is_unknown_when_the_visibility_is_not_shown(
+    tmp_path: Path, visibility: str | None
+) -> None:
+    repo_with_remote(tmp_path)
+    body: dict[str, Any] = {"permissions": {"admin": True}}
+    if visibility is not None:
+        body["private"] = visibility
+    api = FakeApi(ready_responses(repository=(200, body)))
+
+    assert github_checks(tmp_path, api)["private_reporting"]["status"] == "unknown"

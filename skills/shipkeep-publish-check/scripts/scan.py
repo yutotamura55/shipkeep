@@ -937,8 +937,11 @@ def check_private_reporting(repository: str, api: Callable[[str], GhResponse | N
     response = api(f"repos/{repository}/private-vulnerability-reporting")
     if response is None or response[0] != 200 or not isinstance(response[1], dict):
         return result("private_reporting", "unknown", "the setting could not be read with gh")
-    if response[1].get("enabled") is True:
+    enabled = response[1].get("enabled")
+    if enabled is True:
         return result("private_reporting", "pass", "private vulnerability reporting is on")
+    if enabled is not False:
+        return result("private_reporting", "unknown", "GitHub did not show whether it is on")
     return result(
         "private_reporting",
         "fail",
@@ -968,17 +971,20 @@ def check_workflow_token(repository: str, api: Callable[[str], GhResponse | None
     if response is None or response[0] != 200 or not isinstance(response[1], dict):
         return result("workflow_token", "unknown", "the setting could not be read with gh")
     settings = response[1]
-    if settings.get("default_workflow_permissions") not in ("read", "write"):
-        return result("workflow_token", "unknown", "GitHub did not show the default permissions")
+    permissions = settings.get("default_workflow_permissions")
+    can_approve = settings.get("can_approve_pull_request_reviews")
     findings: list[Finding] = []
-    if settings["default_workflow_permissions"] == "write":
+    if permissions == "write":
         findings.append({"kind": "workflow_token_writable"})
-    if settings.get("can_approve_pull_request_reviews") is True:
+    if can_approve is True:
         findings.append({"kind": "workflow_can_approve_reviews"})
     if findings:
         return result(
             "workflow_token", "fail", "the default GITHUB_TOKEN can do more than read", findings
         )
+    # 値がない、または型が違うときは、読み取りだけとも言えない。
+    if permissions != "read" or can_approve is not False:
+        return result("workflow_token", "unknown", "GitHub did not show the default permissions")
     return result("workflow_token", "pass", "the default GITHUB_TOKEN can only read")
 
 
@@ -1003,8 +1009,13 @@ def check_github_readiness(
         return readiness_results(
             "unknown", "reading these settings needs admin access to the repository"
         )
-    if data.get("private") is False:
+    visibility = data.get("private")
+    if visibility is False:
         reporting = check_private_reporting(repository, api)
+    elif visibility is not True:
+        reporting = result(
+            "private_reporting", "unknown", "GitHub did not show whether the repository is public"
+        )
     else:
         reporting = result(
             "private_reporting",
