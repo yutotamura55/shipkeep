@@ -41,6 +41,8 @@ branch = true
 [tool.coverage.report]
 show_missing = true
 skip_covered = true
-# 2026-11-03 に Python 3.10・3.11・3.14 で測った値 (どれも同じ)。下回ったら失敗にする。テストを足して上がったら、この値も上げる。
-fail_under = 95.38
+# 2026-11-03 に Python 3.10・3.11・3.14 で測った値 (どれも同じ) を、小数第 2 位で切り捨てた値。
+# 丸めると、pytest-cov が下限に届かない (FAIL) と表示しながら成功する。
+# 下回ったら失敗にする。テストを足して上がったら、この値も上げる。
+fail_under = 95.83
 precision = 2

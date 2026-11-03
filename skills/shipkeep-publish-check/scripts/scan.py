@@ -233,6 +233,17 @@ def executable(name: str) -> str:
     return os.path.abspath(path)
 
 
+class ScanError(Exception):
+    """利用者に伝える、ローカルのパスを含まない理由を持つ。"""
+
+
+def git_environment() -> dict[str, str]:
+    """Git を起動するときの環境変数。"""
+    # 部分的な clone で欠けたオブジェクトを取りに行かない (取得すると対象に書き込む)。
+    # この環境変数は Git 2.44 以降で働く。古い Git には is_partial_clone() で備える。
+    return {**os.environ, "GIT_NO_LAZY_FETCH": "1"}
+
+
 def git_command(root: Path, *args: str) -> list[str]:
     command = [executable("git"), "-C", str(root)]
     for setting in GIT_SETTINGS:
@@ -244,17 +255,46 @@ def git(root: Path, *args: str, check: bool = True) -> str:
     """読み取り専用の Git コマンドを ``root`` で実行し、標準出力を返す。"""
     # 引数はリストで、シェルを通さない。外から来る値は、オプションの値 (-C のパス)、
     # 接頭辞付きの位置引数 (HEAD:<パス>、repos/<名前>)、または -- の後に置く。
-    completed = subprocess.run(git_command(root, *args), capture_output=True, check=check)  # noqa: S603
+    completed = subprocess.run(  # noqa: S603
+        git_command(root, *args), capture_output=True, check=check, env=git_environment()
+    )
     # 手作業でデコードする。テキストモードではファイル内の単独の CR が LF に変わり、
-    # patch の行を偽造できてしまう。
-    return completed.stdout.decode("utf-8", errors="replace")
+    # patch の行を偽造できてしまう。UTF-8 でないパスも元のバイト列に戻せるよう
+    # surrogateescape で読む。subprocess は引数を同じ規則でバイト列に戻すため、
+    # パスをそのまま Git に渡せる。出力する前に printable() で置換文字にする。
+    return completed.stdout.decode("utf-8", errors="surrogateescape")
 
 
 def git_succeeds(root: Path, *args: str) -> bool:
     # 引数はリストで、シェルを通さない。外から来る値は、オプションの値 (-C のパス)、
     # 接頭辞付きの位置引数 (HEAD:<パス>、repos/<名前>)、または -- の後に置く。
-    completed = subprocess.run(git_command(root, *args), capture_output=True, check=False)  # noqa: S603
+    completed = subprocess.run(  # noqa: S603
+        git_command(root, *args), capture_output=True, check=False, env=git_environment()
+    )
     return completed.returncode == 0
+
+
+def is_partial_clone(root: Path) -> bool:
+    """部分的な clone (欠けたオブジェクトを後から取りに行く) なら真。"""
+    settings = git(
+        root,
+        "config",
+        "--get-regexp",
+        r"^(extensions\.partialclone|remote\..*\.promisor)$",
+        check=False,
+    )
+    return bool(settings.strip())
+
+
+def printable(value: Any) -> Any:
+    """JSON に出せる形にする。UTF-8 でないバイト (surrogateescape) は置換文字にする。"""
+    if isinstance(value, str):
+        return value.encode("utf-8", errors="surrogateescape").decode("utf-8", errors="replace")
+    if isinstance(value, list):
+        return [printable(item) for item in value]
+    if isinstance(value, dict):
+        return {printable(key): printable(item) for key, item in value.items()}
+    return value
 
 
 def repository_root(path: Path) -> Path:
@@ -929,6 +969,12 @@ def scan(root: Path, denylist: list[str] | None = None) -> dict[str, Any]:
     一覧の中の番号 (1 始まり) で示す。
     """
     root = repository_root(root)
+    if is_partial_clone(root):
+        # 欠けたオブジェクトを読むと Git が取りに行き、対象のリポジトリに書き込む。
+        raise ScanError(
+            "this is a partial clone; reading history could fetch objects into it. "
+            "Run the script on a full clone"
+        )
     if not has_commits(root):
         checks = [
             result(check_id, "unknown", "the repository has no commits") for check_id in CHECK_IDS
@@ -949,7 +995,7 @@ def scan(root: Path, denylist: list[str] | None = None) -> dict[str, Any]:
         status: sum(1 for check in checks if check["status"] == status)
         for status in ("pass", "fail", "unknown", "not_applicable")
     }
-    return {"schema": SCHEMA_VERSION, "counts": counts, "checks": checks}
+    return {"schema": SCHEMA_VERSION, "counts": counts, "checks": printable(checks)}
 
 
 def is_git_repository(path: Path) -> bool:
@@ -1011,6 +1057,9 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     try:
         output = scan(root, denylist)
+    except ScanError as error:
+        print(f"error: {error}", file=sys.stderr)
+        return 2
     except (subprocess.CalledProcessError, OSError, ValueError):
         print("git failed while reading the repository", file=sys.stderr)
         return 2

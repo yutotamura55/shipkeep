@@ -326,14 +326,19 @@ def tracked_files(root: Path) -> tuple[Path, list[str]]:
     if top.returncode != 0:
         raise InventoryError("the path is not inside a Git repository")
     top_path = Path(top.stdout.strip())
+    # ls-files は索引だけを読むが、sparse index を展開するときに木のオブジェクトを読む。
+    # 部分的な clone で欠けたオブジェクトを取りに行かないよう止める (Git 2.44 以降で働く)。
     listing = subprocess.run(  # noqa: S603
         [git, "-C", str(top_path), "-c", "core.quotePath=false", "ls-files", "-z"],
         capture_output=True,
         check=False,
+        env={**os.environ, "GIT_NO_LAZY_FETCH": "1"},
     )
     if listing.returncode != 0:
         raise InventoryError("git ls-files failed")
-    names = listing.stdout.decode("utf-8", errors="replace").split("\0")
+    # UTF-8 でないパスも元のバイト列に戻せるよう surrogateescape で読む。Path は同じ規則で
+    # バイト列に戻すため、そのまま開ける。出力する前に printable() で置換文字にする。
+    names = listing.stdout.decode("utf-8", errors="surrogateescape").split("\0")
     return top_path, sorted(name for name in names if name and not is_vendored(name))
 
 
@@ -480,14 +485,28 @@ def inventory(root: Path) -> dict[str, Any]:
     counts = {s: 0 for s in ("pass", "fail", "unknown", "not_applicable")}
     for row in rows:
         counts[row["status"]] += 1
-    return {
-        "schema": SCHEMA_VERSION,
-        "languages": languages,
-        # 表にない言語のソースの拡張子 (多い順)。エージェントが言語を判断する。
-        "unrecognized_source_extensions": unrecognized,
-        "counts": counts,
-        "aspects": rows,
-    }
+    result: dict[str, Any] = printable(
+        {
+            "schema": SCHEMA_VERSION,
+            "languages": languages,
+            # 表にない言語のソースの拡張子 (多い順)。エージェントが言語を判断する。
+            "unrecognized_source_extensions": unrecognized,
+            "counts": counts,
+            "aspects": rows,
+        }
+    )
+    return result
+
+
+def printable(value: Any) -> Any:
+    """JSON に出せる形にする。UTF-8 でないバイト (surrogateescape) は置換文字にする。"""
+    if isinstance(value, str):
+        return value.encode("utf-8", errors="surrogateescape").decode("utf-8", errors="replace")
+    if isinstance(value, list):
+        return [printable(item) for item in value]
+    if isinstance(value, dict):
+        return {printable(key): printable(item) for key, item in value.items()}
+    return value
 
 
 class QuietArgumentParser(argparse.ArgumentParser):
@@ -495,7 +514,8 @@ class QuietArgumentParser(argparse.ArgumentParser):
 
     def error(self, message: str) -> NoReturn:
         self.print_usage(sys.stderr)
-        print(f"error: {message}", file=sys.stderr)
+        # argparse の文は、渡された値 (誤って渡したパスなど) をそのまま含むため出さない。
+        print("error: invalid arguments; see --help", file=sys.stderr)
         raise SystemExit(2)
 
 
