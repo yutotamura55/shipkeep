@@ -66,7 +66,23 @@ SECRET_PATTERNS = {
 KEY_LIKE = re.compile(r"[A-Za-z0-9+/_-]{20,}")
 # ローカルのパスの始まり。括弧や引用符の直後なら閉じる記号まで伏せ、空白を含むパスも
 # 隠す。それ以外は次の空白まで伏せる。
-LOCAL_PATH_START = re.compile(r"(?:/home/|/Users/|[A-Za-z]:\\+Users\\+)[A-Za-z0-9_.-]+")
+# ユーザー名に使える文字。ASCII の英数字と "_.-" に加え、ASCII でない文字をすべて
+# (日本語の名前、絵文字、結合文字、UTF-8 として読めなかったバイトの U+FFFD と
+# surrogateescape の文字を含む) 名前とみなす。ASCII の記号、空白、全角の括弧や
+# 句読点は含めない。"(/home/user)" の名前を "user)" と読むと、GENERIC_USER_NAMES と
+# 比べられなくなるため。全角の記号の一覧から漏れた記号は名前に入り、報告が増える
+# だけで、見逃しにはならない。
+ASCII_NAME_CHAR = r"[A-Za-z0-9_.-]"
+# 全角の括弧と句読点。Ruff が紛らわしい文字として止めるため、エスケープで書く。
+FULLWIDTH_PUNCTUATION = (
+    "\u3001\u3002\uff0c\uff0e\u30fb\uff1a\uff1b\uff01\uff1f\uff08"
+    "\uff09\uff3b\uff3d\uff5b\uff5d\u300c\u300d\u300e\u300f\u3010"
+    "\u3011\u3008\u3009\u300a\u300b\u3014\u3015\u201c\u201d\u2018"
+    "\u2019\u2026"
+)
+NON_ASCII_NAME_CHAR = r"(?:(?![\x00-\x7f\s])[^" + FULLWIDTH_PUNCTUATION + "])"
+USER_NAME_CHARS = "(?:" + ASCII_NAME_CHAR + "|" + NON_ASCII_NAME_CHAR + ")"
+LOCAL_PATH_START = re.compile(r"(?:/home/|/Users/|[A-Za-z]:\\+Users\\+)" + USER_NAME_CHARS + "+")
 CLOSERS = {"(": ")", "[": "]", "<": ">", "'": "'", '"': '"', "`": "`"}
 # "=" や ":" の後の値は、長さを問わずパスワードの可能性がある。
 ASSIGNED_VALUE = re.compile(r"[=:]\s*([^\s'\"]+)")
@@ -99,7 +115,14 @@ FILE_EXTENSIONS = {
     "ttf",
     "otf",
 }
-USER_NAME = r"([A-Za-z0-9_.-]+)(?![A-Za-z0-9_.-])"
+# 照合するユーザー名は、ASCII の文字の並びか、ASCII でない文字の並びのどちらか一方とする。
+# 日本語の文では "/home/userのように" とパスの直後に語が続く。名前を "userのように" と
+# 読むと、GENERIC_USER_NAMES と比べられずに誤って報告するため。
+# そのため "userテスト" のような名前は "user" と読んで見逃すが、まれな形として受け入れる。
+USER_NAME = (
+    "(" + ASCII_NAME_CHAR + "+(?!" + ASCII_NAME_CHAR + ")"
+    "|" + NON_ASCII_NAME_CHAR + "+(?!" + NON_ASCII_NAME_CHAR + "))"
+)
 HOME_PATHS = (
     re.compile(r"(/home/)" + USER_NAME),
     re.compile(r"(/Users/)" + USER_NAME),
