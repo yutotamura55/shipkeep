@@ -12,7 +12,6 @@
 from __future__ import annotations
 
 import argparse
-import ast
 import fnmatch
 import json
 import os
@@ -219,6 +218,18 @@ TEST_PATHSPECS = (
 )
 
 HIDDEN_PATH = "(hidden: the path contains confidential text)"
+# Git が引用の中で使う、バックスラッシュに続く 1 文字の表記。
+C_ESCAPES = {
+    ord("a"): b"\a",
+    ord("b"): b"\b",
+    ord("t"): b"\t",
+    ord("n"): b"\n",
+    ord("v"): b"\v",
+    ord("f"): b"\f",
+    ord("r"): b"\r",
+    ord('"'): b'"',
+    ord("\\"): b"\\",
+}
 
 
 def executable(name: str) -> str:
@@ -315,12 +326,32 @@ def result(
 
 
 def unquote_path(text: str) -> str:
-    """Git が特殊なファイル名に付ける C 言語風の引用を元に戻す。"""
-    if text.startswith('"') and text.endswith('"'):
-        unquoted = ast.literal_eval(text)
-        if isinstance(unquoted, str):
-            return unquoted
-    return text
+    """Git が特殊なファイル名に付ける C 言語風の引用を元に戻す。
+
+    Git の引用はバイト列に対するもので、8 進数の表記もバイトを表す。surrogateescape で
+    読んだ文字をバイト列に戻してから解き、同じ規則で文字列に戻す。
+    """
+    if len(text) < 2 or not (text.startswith('"') and text.endswith('"')):
+        return text
+    raw = text[1:-1].encode("utf-8", errors="surrogateescape")
+    out = bytearray()
+    i = 0
+    while i < len(raw):
+        if raw[i] == ord("\\") and i + 1 < len(raw):
+            following = raw[i + 1]
+            if ord("0") <= following <= ord("7"):
+                end = i + 1
+                while end < min(i + 4, len(raw)) and ord("0") <= raw[end] <= ord("7"):
+                    end += 1
+                out.append(int(raw[i + 1 : end], 8) & 0xFF)
+                i = end
+                continue
+            out += C_ESCAPES.get(following, bytes([following]))
+            i += 2
+            continue
+        out.append(raw[i])
+        i += 1
+    return out.decode("utf-8", errors="surrogateescape")
 
 
 @dataclass(frozen=True)
