@@ -284,7 +284,14 @@ REPOSITORY_ASPECTS: tuple[tuple[str, tuple[Tool, ...], bool], ...] = (
     # PR で増える依存の脆弱性を調べる GitHub の action。GitHub Actions を使う場合だけ該当する。
     (
         "dependency_review",
-        (Tool("dependency-review-action", r"\bactions/dependency-review-action\b"),),
+        (
+            Tool(
+                "dependency-review-action",
+                # uses: の値として、この action そのもの (版の指定の @ まで) を探す。
+                r"""(?m)^\s*(?:-\s*)?uses:\s*['"]?actions/dependency-review-action@""",
+                sources=WORKFLOW_FILES,
+            ),
+        ),
         True,
     ),
     ("diff_coverage", (Tool("diff-cover", r"\bdiff[-_]cover\b"),), False),

@@ -337,3 +337,36 @@ def test_dependency_review_fails_when_workflows_lack_it(tmp_path: Path) -> None:
     repo.commit({".github/workflows/ci.yml": workflow})
 
     assert row(inventory.inventory(tmp_path), "repository", "dependency_review")["status"] == "fail"
+
+
+@pytest.mark.parametrize(
+    ("files"),
+    [
+        {"package.json": '{"description": "uses actions/dependency-review-action@v4"}'},
+        {".github/workflows/ci.yml": "  - uses: other-actions/dependency-review-action@v4\n"},
+        {".github/workflows/ci.yml": "  - uses: actions/dependency-review-action-extra@v4\n"},
+        {".github/workflows/ci.yml": "# uses: actions/dependency-review-action@v4\n"},
+    ],
+)
+def test_dependency_review_is_only_the_action_in_a_workflow(
+    tmp_path: Path, files: dict[str, str]
+) -> None:
+    repo = GitRepo(tmp_path)
+    repo.commit({".github/workflows/base.yml": "jobs: {}\n", **files})
+
+    assert row(inventory.inventory(tmp_path), "repository", "dependency_review")["status"] == "fail"
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "      - uses: actions/dependency-review-action@abc # v4",
+        "        uses: 'actions/dependency-review-action@v4'",
+        '      - uses: "actions/dependency-review-action@v4"',
+    ],
+)
+def test_dependency_review_is_found_in_each_way_to_write_uses(tmp_path: Path, line: str) -> None:
+    repo = GitRepo(tmp_path)
+    repo.commit({".github/workflows/review.yaml": "jobs:\n  r:\n    steps:\n" + line + "\n"})
+
+    assert row(inventory.inventory(tmp_path), "repository", "dependency_review")["status"] == "pass"
