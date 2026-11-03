@@ -287,8 +287,12 @@ REPOSITORY_ASPECTS: tuple[tuple[str, tuple[Tool, ...], bool], ...] = (
         (
             Tool(
                 "dependency-review-action",
-                # uses: の値として、この action そのもの (版の指定の @ まで) を探す。
-                r"""(?m)^\s*(?:-\s*)?uses:\s*['"]?actions/dependency-review-action@""",
+                # workflow の中で、コメントでない行にある action の参照 (版の指定の @ まで)
+                # を探す。標準ライブラリでは YAML を解析できないため、uses: の書き方
+                # (引用符付きのキー、{uses: ...}、次の行に書いた値) を問わず見つける方に
+                # 倒す。run: の中の同じ文字列にも当たるが、エージェントが根拠のファイルを
+                # 読んで確かめる (SKILL.md の手順 2)。
+                r"(?m)^[^#\n]*?(?<![\w./-])actions/dependency-review-action@",
                 sources=WORKFLOW_FILES,
             ),
         ),

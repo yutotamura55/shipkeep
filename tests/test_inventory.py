@@ -363,6 +363,9 @@ def test_dependency_review_is_only_the_action_in_a_workflow(
         "      - uses: actions/dependency-review-action@abc # v4",
         "        uses: 'actions/dependency-review-action@v4'",
         '      - uses: "actions/dependency-review-action@v4"',
+        '      - "uses": actions/dependency-review-action@v4',
+        "      - {uses: actions/dependency-review-action@v4}",
+        "      - uses: >-\n          actions/dependency-review-action@v4",
     ],
 )
 def test_dependency_review_is_found_in_each_way_to_write_uses(tmp_path: Path, line: str) -> None:
