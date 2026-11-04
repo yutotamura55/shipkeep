@@ -1187,9 +1187,14 @@ EVIDENCE_KEYS = ("kind", "commit", "path", "line", "context")
 
 def head_commit(root: Path) -> str | None:
     """HEAD のコミットの SHA。コミットがなければ None。"""
-    if not has_commits(root):
-        return None
-    return git(root, "rev-parse", "HEAD").strip()
+    return git(root, "rev-parse", "--verify", "--quiet", "HEAD", check=False).strip() or None
+
+
+def count_statuses(items: list[dict[str, Any]]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for item in items:
+        counts[item["status"]] = counts.get(item["status"], 0) + 1
+    return counts
 
 
 def to_evidence(finding: Finding) -> dict[str, Any]:
@@ -1220,7 +1225,7 @@ def to_result(output: dict[str, Any], commit: str | None) -> dict[str, Any]:
         "format": RESULT_FORMAT,
         "tool": {"name": TOOL_NAME},
         "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-        "counts": output["counts"],
+        "counts": count_statuses(items),
         "items": items,
     }
     if commit:
@@ -1345,14 +1350,14 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     try:
         output = scan(root, denylist)
+        if args.format == "result":
+            output = to_result(output, head_commit(root))
     except ScanError as error:
         print(f"error: {error}", file=sys.stderr)
         return 2
     except (subprocess.CalledProcessError, OSError, ValueError):
         print("git failed while reading the repository", file=sys.stderr)
         return 2
-    if args.format == "result":
-        output = to_result(output, head_commit(root))
     json.dump(output, sys.stdout, indent=2)
     sys.stdout.write("\n")
     return 0

@@ -2,7 +2,8 @@
 
 jsonschema ライブラリに頼らず、スキーマが使う語だけを実装する: type、required、properties、
 additionalProperties、items、enum、const、pattern、minimum、minLength、$ref (#/$defs/...)、
-format (date-time)。対応しない語があれば失敗にして、黙って通さない。
+format (date-time だけ)、allOf、if/then/else、not。検証の前にスキーマ全体を走査し、対応しない語や
+format があれば ValueError にして、黙って通さない。
 """
 
 from __future__ import annotations
@@ -21,11 +22,8 @@ TYPES = {
     "integer": int,
     "boolean": bool,
 }
-KNOWN_KEYWORDS = {
-    "$schema",
-    "$id",
-    "title",
-    "description",
+ANNOTATIONS = {"$schema", "$id", "title", "description"}
+ASSERTIONS = {
     "type",
     "required",
     "properties",
@@ -38,8 +36,15 @@ KNOWN_KEYWORDS = {
     "minLength",
     "$ref",
     "format",
-    "$defs",
+    "allOf",
+    "if",
+    "then",
+    "else",
+    "not",
 }
+SUPPORTED_FORMATS = {"date-time"}
+# RFC 3339 の date-time。時刻とタイムゾーンを必ず含む。
+DATE_TIME = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$")
 
 
 def load_schema() -> dict[str, Any]:
@@ -47,9 +52,27 @@ def load_schema() -> dict[str, Any]:
     return schema
 
 
+def check_supported(schema: dict[str, Any], where: str = "#") -> None:
+    """スキーマ全体を走査し、対応しない語や format があれば ValueError を送出する。"""
+    unknown = set(schema) - ANNOTATIONS - ASSERTIONS - {"$defs"}
+    if unknown:
+        raise ValueError(f"unsupported schema keywords at {where}: {sorted(unknown)}")
+    if "format" in schema and schema["format"] not in SUPPORTED_FORMATS:
+        raise ValueError(f"unsupported format at {where}: {schema['format']}")
+    for key in ("properties", "$defs"):
+        for name, sub in schema.get(key, {}).items():
+            check_supported(sub, f"{where}/{key}/{name}")
+    for key in ("items", "additionalProperties", "if", "then", "else", "not"):
+        if isinstance(schema.get(key), dict):
+            check_supported(schema[key], f"{where}/{key}")
+    for index, sub in enumerate(schema.get("allOf", [])):
+        check_supported(sub, f"{where}/allOf/{index}")
+
+
 def validate(document: Any, schema: dict[str, Any] | None = None) -> list[str]:
     """スキーマに合わない箇所を "<場所>: <理由>" の一覧で返す。空なら合っている。"""
     root = schema or load_schema()
+    check_supported(root)
     errors: list[str] = []
     _check(document, root, root, "$", errors)
     return errors
@@ -65,15 +88,26 @@ def _resolve(ref: str, root: dict[str, Any]) -> dict[str, Any]:
     return node
 
 
+def _valid(value: Any, schema: dict[str, Any], root: dict[str, Any]) -> bool:
+    errors: list[str] = []
+    _check(value, schema, root, "$", errors)
+    return not errors
+
+
 def _check(
     value: Any, schema: dict[str, Any], root: dict[str, Any], where: str, errors: list[str]
 ) -> None:
-    unknown = set(schema) - KNOWN_KEYWORDS
-    if unknown:
-        raise ValueError(f"unsupported schema keywords at {where}: {sorted(unknown)}")
     if "$ref" in schema:
+        # 参照先を検証し、同じ階層のほかの制約も続けて検証する (2020-12 の規則)。
         _check(value, _resolve(schema["$ref"], root), root, where, errors)
-        return
+    for sub in schema.get("allOf", []):
+        _check(value, sub, root, where, errors)
+    if "if" in schema:
+        branch = "then" if _valid(value, schema["if"], root) else "else"
+        if branch in schema:
+            _check(value, schema[branch], root, where, errors)
+    if "not" in schema and _valid(value, schema["not"], root):
+        errors.append(f"{where}: must not match the 'not' schema")
     if "const" in schema and value != schema["const"]:
         errors.append(f"{where}: must be {schema['const']!r}")
     if "enum" in schema and value not in schema["enum"]:
@@ -89,11 +123,8 @@ def _check(
             errors.append(f"{where}: does not match {schema['pattern']}")
         if "minLength" in schema and len(value) < schema["minLength"]:
             errors.append(f"{where}: shorter than {schema['minLength']}")
-        if schema.get("format") == "date-time":
-            try:
-                datetime.fromisoformat(value.replace("Z", "+00:00"))
-            except ValueError:
-                errors.append(f"{where}: not a date-time")
+        if schema.get("format") == "date-time" and not _is_date_time(value):
+            errors.append(f"{where}: not an RFC 3339 date-time")
     is_integer = isinstance(value, int) and not isinstance(value, bool)
     if is_integer and "minimum" in schema and value < schema["minimum"]:
         errors.append(f"{where}: below {schema['minimum']}")
@@ -112,3 +143,13 @@ def _check(
     if isinstance(value, list) and "items" in schema:
         for index, item in enumerate(value):
             _check(item, schema["items"], root, f"{where}[{index}]", errors)
+
+
+def _is_date_time(value: str) -> bool:
+    if not DATE_TIME.match(value):
+        return False
+    try:
+        datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    return True

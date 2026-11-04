@@ -176,6 +176,34 @@ def test_the_default_output_is_unchanged(
             },
             "below 0",
         ),
+        (
+            {
+                "format": "shipkeep-result/1",
+                "tool": {"name": "x"},
+                "items": [
+                    {"id": "c", "check": "c", "status": "pass", "summary": "s", "severity": "low"}
+                ],
+            },
+            "must not match",
+        ),
+        (
+            {
+                "format": "shipkeep-result/1",
+                "tool": {"name": "x"},
+                "items": [],
+                "generated_at": "2026-11-04",
+            },
+            "not an RFC 3339 date-time",
+        ),
+        (
+            {
+                "format": "shipkeep-result/1",
+                "tool": {"name": "x"},
+                "items": [],
+                "generated_at": "2026-11-04T10:00:00",
+            },
+            "not an RFC 3339 date-time",
+        ),
     ],
 )
 def test_the_validator_rejects_documents_that_break_the_schema(
@@ -192,7 +220,7 @@ def test_inventory_head_commit_is_none_when_git_is_missing_or_fails(
     monkeypatch.setattr("shutil.which", lambda name: None)
     assert inventory.head_commit(tmp_path) is None
 
-    monkeypatch.setattr("shutil.which", lambda name: "git")
+    monkeypatch.setattr("shutil.which", lambda name: "/usr/bin/git")
 
     def failing(git: str, root: Path, *args: str) -> tuple[int, str]:
         raise OSError("cannot start git")
@@ -217,3 +245,60 @@ def test_inventory_result_without_commits_has_no_target(
 
     assert validate(document) == []
     assert "target" not in document
+
+
+def test_hotspots_ids_allow_paths_with_spaces(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    repo = GitRepo(tmp_path)
+    repo.commit({"my app.py": "x = 1\n"})
+    repo.commit({"my app.py": "x = 2\n"})
+
+    document = run(hotspots.main, [str(tmp_path), "--format", "result"], capsys)
+
+    assert validate(document) == []
+    assert document["items"][0]["id"] == "hotspot/my app.py"
+
+
+def test_inventory_result_lists_unrecognized_extensions(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    repo = GitRepo(tmp_path)
+    repo.commit({"main.lua": "print(1)\n"})
+
+    document = run(inventory.main, [str(tmp_path), "--format", "result"], capsys)
+
+    assert validate(document) == []
+    items = {item["id"]: item for item in document["items"]}
+    assert items["unrecognized_extension/lua"]["status"] == "info"
+    assert sum(document["counts"].values()) == len(document["items"])
+
+
+def test_scan_result_reports_git_failures_with_a_fixed_message(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    make_repo(tmp_path)
+
+    def failing(root: Path) -> str | None:
+        raise OSError("git vanished")
+
+    monkeypatch.setattr(scan, "head_commit", failing)
+
+    assert scan.main([str(tmp_path), "--format", "result"]) == 2
+    err = capsys.readouterr().err
+    assert "git failed while reading the repository" in err
+    assert str(tmp_path) not in err
+
+
+def test_the_validator_refuses_schemas_it_does_not_understand() -> None:
+    schema = {"type": "object", "properties": {"a": {"type": "string", "maxLength": 3}}}
+    with pytest.raises(ValueError, match="maxLength"):
+        validate({"a": "x"}, schema)
+    with pytest.raises(ValueError, match="unsupported format"):
+        validate("x", {"type": "string", "format": "uri"})
+
+
+def test_the_validator_applies_constraints_next_to_a_ref() -> None:
+    schema = {"$defs": {"n": {"type": "integer"}}, "$ref": "#/$defs/n", "minimum": 1}
+    assert validate(1, schema) == []
+    assert validate(0, schema) == ["$: below 1"]

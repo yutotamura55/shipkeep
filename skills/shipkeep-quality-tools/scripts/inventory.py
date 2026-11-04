@@ -494,6 +494,17 @@ def to_result(output: dict[str, Any], commit: str | None) -> dict[str, Any]:
                 "evidence": [{"kind": "file", "path": path} for path in language["evidence"]],
             }
         )
+    for extension in output["unrecognized_source_extensions"]:
+        items.append(
+            {
+                "id": f"unrecognized_extension/{extension}",
+                "check": "unrecognized_extension",
+                "status": "info",
+                "confidence": "likely",
+                "summary": f"source files with the extension .{extension} belong to a language "
+                "the inventory does not know; decide the language and research its tools",
+            }
+        )
     for row in output["aspects"]:
         item: dict[str, Any] = {
             "id": f"{row['aspect']}/{row['scope']}",
@@ -516,7 +527,7 @@ def to_result(output: dict[str, Any], commit: str | None) -> dict[str, Any]:
         "format": RESULT_FORMAT,
         "tool": {"name": TOOL_NAME},
         "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-        "counts": output["counts"],
+        "counts": count_statuses(items),
         "items": items,
     }
     if commit:
@@ -524,13 +535,17 @@ def to_result(output: dict[str, Any], commit: str | None) -> dict[str, Any]:
     return result
 
 
+def count_statuses(items: list[dict[str, Any]]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for item in items:
+        counts[item["status"]] = counts.get(item["status"], 0) + 1
+    return counts
+
+
 def head_commit(root: Path) -> str | None:
     """HEAD のコミットの SHA。コミットがないか読めなければ None。"""
-    git = shutil.which("git")
-    if git is None:
-        return None
     try:
-        code, out = run_git(git, root, "rev-parse", "--verify", "--quiet", "HEAD")
+        code, out = run_git(executable("git"), root, "rev-parse", "--verify", "--quiet", "HEAD")
     except OSError:
         return None
     return out.strip() if code == 0 and out.strip() else None
