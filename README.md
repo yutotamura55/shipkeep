@@ -65,7 +65,8 @@ Python 3.10 以上と Git が必要です。複雑度と重複の計測には、
 
 ## 開発
 
-Docker と Docker Compose が必要です。リポジトリのルートで次を実行すると、コンテナの中で CI と同じ検査（Ruff の書式と lint、mypy、pytest）が動きます。
+Docker と Docker Compose が必要です。リポジトリのルートで次を実行すると、コンテナの中で CI と同じ検査（Ruff の書式と lint、mypy、pytest とカバレッジ）が動きます。
+Ruff の lint にはセキュリティの規則（`S`、flake8-bandit 相当）を含めています。カバレッジは skill のスクリプトを対象に測り、`pyproject.toml` の `fail_under` を下回ると失敗します。
 
 ```bash
 export HOST_UID=$(id -u) HOST_GID=$(id -g)
