@@ -7,3 +7,6 @@ __pycache__/
 .env
 .env.*
 !.env.example
+.coverage
+.coverage.*
+coverage.xml

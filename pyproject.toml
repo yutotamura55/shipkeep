@@ -10,7 +10,12 @@ line-length = 100
 target-version = "py310"
 
 [tool.ruff.lint]
-select = ["E", "F", "W", "I", "B", "UP", "SIM", "RUF"]
+select = ["E", "F", "W", "I", "B", "UP", "SIM", "RUF", "S"]
+
+[tool.ruff.lint.per-file-ignores]
+# S101：pytest は assert で結果を確かめるため、テストでは除く。
+# subprocess の呼び出し (S603・S607) は、確かめた箇所ごとに理由を書いて除く。
+"tests/**" = ["S101"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["hotspots", "inventory", "scan"]
@@ -27,3 +32,15 @@ mypy_path = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.coverage.run]
+# skill のスクリプトだけを測る。テストのコードは対象にしない。
+source = ["skills"]
+branch = true
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true
+# 2026-11-03 に Python 3.10・3.11・3.14 で測った値 (どれも同じ)。下回ったら失敗にする。テストを足して上がったら、この値も上げる。
+fail_under = 95.86
+precision = 2

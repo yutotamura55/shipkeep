@@ -7,7 +7,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
-from gitrepo import GitRepo
+from gitrepo import GIT, GitRepo
 
 import scan
 
@@ -255,7 +255,7 @@ def test_git_failure_stops_without_a_traceback(
             for item in folder.iterdir():
                 item.chmod(0o600)
                 item.unlink()
-    subprocess.run(["git", "-C", str(tmp_path), "status"], capture_output=True, check=False)
+    subprocess.run([GIT, "-C", str(tmp_path), "status"], capture_output=True, check=False)  # noqa: S603 (テスト用の git を固定の引数で起動する)
 
     assert scan.main([str(tmp_path)]) == 2
     err = capsys.readouterr().err

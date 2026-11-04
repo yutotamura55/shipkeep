@@ -14,7 +14,9 @@ from __future__ import annotations
 import argparse
 import fnmatch
 import json
+import os
 import re
+import shutil
 import stat
 import subprocess
 import sys
@@ -313,11 +315,25 @@ def matches(path: str, pattern: str) -> bool:
     return fnmatch.fnmatchcase(PurePosixPath(path).name, pattern)
 
 
+def executable(name: str) -> str:
+    """PATH にある実行ファイルの絶対パスを返す。見つからなければ ``OSError`` を送出する。
+
+    起動の時点で探し直さず、ここで一度だけ絶対パスに決める。
+    """
+    path = shutil.which(name)
+    if path is None:
+        raise OSError(f"{name} is not on PATH")
+    # PATH に相対のディレクトリや空の項目があると、which は相対パスや名前だけを返す。
+    return os.path.abspath(path)
+
+
 def tracked_files(root: Path) -> tuple[Path, list[str]]:
     """リポジトリの最上位と、Git が追跡しているファイルの相対パスを返す。"""
+    # 引数はリストで、シェルを通さない。外から来る値は -C のパスだけである。
     try:
-        top = subprocess.run(
-            ["git", "-C", str(root), "rev-parse", "--show-toplevel"],
+        git = executable("git")
+        top = subprocess.run(  # noqa: S603
+            [git, "-C", str(root), "rev-parse", "--show-toplevel"],
             capture_output=True,
             text=True,
             check=False,
@@ -327,8 +343,8 @@ def tracked_files(root: Path) -> tuple[Path, list[str]]:
     if top.returncode != 0:
         raise InventoryError("the path is not inside a Git repository")
     top_path = Path(top.stdout.strip())
-    listing = subprocess.run(
-        ["git", "-C", str(top_path), "-c", "core.quotePath=false", "ls-files", "-z"],
+    listing = subprocess.run(  # noqa: S603
+        [git, "-C", str(top_path), "-c", "core.quotePath=false", "ls-files", "-z"],
         capture_output=True,
         check=False,
     )
