@@ -327,30 +327,50 @@ def executable(name: str) -> str:
     return os.path.abspath(path)
 
 
-def tracked_files(root: Path) -> tuple[Path, list[str]]:
-    """リポジトリの最上位と、Git が追跡しているファイルの相対パスを返す。"""
+def run_git(git: str, root: Path, *args: str) -> tuple[int, str]:
+    """読み取り専用の Git コマンドを実行し、終了コードと標準出力を返す。"""
     # 引数はリストで、シェルを通さない。外から来る値は -C のパスだけである。
-    try:
-        git = executable("git")
-        top = subprocess.run(  # noqa: S603
-            [git, "-C", str(root), "rev-parse", "--show-toplevel"],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-    except OSError as error:
-        raise InventoryError("git could not be started") from error
-    if top.returncode != 0:
-        raise InventoryError("the path is not inside a Git repository")
-    top_path = Path(top.stdout.strip())
-    listing = subprocess.run(  # noqa: S603
-        [git, "-C", str(top_path), "-c", "core.quotePath=false", "ls-files", "-z"],
+    # 部分的な clone で欠けたオブジェクトを取りに行かない (取得すると対象に書き込む)。
+    # この環境変数は Git 2.44 以降で働く。古い Git には設定を調べて止めることで備える。
+    result = subprocess.run(  # noqa: S603
+        [git, "-C", str(root), "-c", "core.quotePath=false", *args],
         capture_output=True,
         check=False,
+        env={**os.environ, "GIT_NO_LAZY_FETCH": "1"},
     )
-    if listing.returncode != 0:
+    # UTF-8 でないパスも元のバイト列に戻せるよう surrogateescape で読む。Path は同じ規則で
+    # バイト列に戻すため、そのまま開ける。出力する前に printable() で置換文字にする。
+    return result.returncode, result.stdout.decode("utf-8", errors="surrogateescape")
+
+
+def tracked_files(root: Path) -> tuple[Path, list[str]]:
+    """リポジトリの最上位と、Git が追跡しているファイルの相対パスを返す。"""
+    try:
+        git = executable("git")
+        code, top = run_git(git, root, "rev-parse", "--show-toplevel")
+    except OSError as error:
+        raise InventoryError("git could not be started") from error
+    if code != 0:
+        raise InventoryError("the path is not inside a Git repository")
+    top_path = Path(top.removesuffix("\n"))
+    # ls-files は索引だけを読むが、sparse index を展開するときに木のオブジェクトを読む。
+    # 欠けたオブジェクトを取りに行く部分的な clone は、読む前に止める。
+    _, promisor = run_git(
+        git,
+        top_path,
+        "config",
+        "--get-regexp",
+        r"^(extensions\.partialclone|remote\..*\.promisor)$",
+    )
+    if promisor.strip():
+        raise InventoryError(
+            "this is a partial clone; reading it could fetch objects into it. "
+            "Run the script on a full clone"
+        )
+    code, listing = run_git(git, top_path, "ls-files", "-z")
+    if code != 0:
         raise InventoryError("git ls-files failed")
-    names = listing.stdout.decode("utf-8", errors="replace").split("\0")
+    names = listing.split("\0")
     return top_path, sorted(name for name in names if name and not is_vendored(name))
 
 
@@ -497,14 +517,28 @@ def inventory(root: Path) -> dict[str, Any]:
     counts = {s: 0 for s in ("pass", "fail", "unknown", "not_applicable")}
     for row in rows:
         counts[row["status"]] += 1
-    return {
-        "schema": SCHEMA_VERSION,
-        "languages": languages,
-        # 表にない言語のソースの拡張子 (多い順)。エージェントが言語を判断する。
-        "unrecognized_source_extensions": unrecognized,
-        "counts": counts,
-        "aspects": rows,
-    }
+    result: dict[str, Any] = printable(
+        {
+            "schema": SCHEMA_VERSION,
+            "languages": languages,
+            # 表にない言語のソースの拡張子 (多い順)。エージェントが言語を判断する。
+            "unrecognized_source_extensions": unrecognized,
+            "counts": counts,
+            "aspects": rows,
+        }
+    )
+    return result
+
+
+def printable(value: Any) -> Any:
+    """JSON に出せる形にする。UTF-8 でないバイト (surrogateescape) は置換文字にする。"""
+    if isinstance(value, str):
+        return value.encode("utf-8", errors="surrogateescape").decode("utf-8", errors="replace")
+    if isinstance(value, list):
+        return [printable(item) for item in value]
+    if isinstance(value, dict):
+        return {printable(key): printable(item) for key, item in value.items()}
+    return value
 
 
 class QuietArgumentParser(argparse.ArgumentParser):
@@ -512,7 +546,8 @@ class QuietArgumentParser(argparse.ArgumentParser):
 
     def error(self, message: str) -> NoReturn:
         self.print_usage(sys.stderr)
-        print(f"error: {message}", file=sys.stderr)
+        # argparse の文は、渡された値 (誤って渡したパスなど) をそのまま含むため出さない。
+        print("error: invalid arguments; see --help", file=sys.stderr)
         raise SystemExit(2)
 
 
