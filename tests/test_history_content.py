@@ -103,17 +103,60 @@ def test_personal_data_passes_for_a_dependabot_commit_message(tmp_path: Path) ->
     assert check(tmp_path, "history_personal_data")["status"] == "pass"
 
 
-def test_personal_data_still_finds_a_personal_address_next_to_a_service_address(
+def test_personal_data_passes_for_a_bot_trailer_with_another_service_address(
+    tmp_path: Path,
+) -> None:
+    repo = GitRepo(tmp_path)
+    trailer = "Co-authored-by: renovate[bot] <" + "bot" + "@" + "renovateapp.com>"
+    repo.commit({"a.txt": "x\n"}, message=f"chore(deps)\n\n{trailer}\n")
+
+    assert check(tmp_path, "history_personal_data")["status"] == "pass"
+
+
+def test_personal_data_reports_a_trailer_whose_name_is_not_a_bot(tmp_path: Path) -> None:
+    repo = GitRepo(tmp_path)
+    commit = repo.commit(
+        {"a.txt": "x\n"}, message=f"chore\n\nCo-authored-by: Someone <{PERSONAL_EMAIL}>\n"
+    )
+
+    found = check(tmp_path, "history_personal_data")
+
+    assert findings(found) == [{"kind": "email_in_commit_message", "commit": commit[:12]}]
+
+
+def test_personal_data_reports_a_personal_address_on_the_service_domain(tmp_path: Path) -> None:
+    repo = GitRepo(tmp_path)
+    same_domain = "someone" + "@" + "github.com"
+    commit = repo.commit({"a.txt": "x\n"}, message=f"chore\n\nCc: {same_domain}\n")
+
+    found = check(tmp_path, "history_personal_data")
+
+    assert findings(found) == [{"kind": "email_in_commit_message", "commit": commit[:12]}]
+
+
+def test_personal_data_counts_only_the_personal_line_and_masks_every_address(
     tmp_path: Path,
 ) -> None:
     repo = GitRepo(tmp_path)
     service = "support" + "@" + "github.com"
-    commit = repo.commit({"a.txt": "x\n"}, message=f"chore\n\nCc: {service}, {PERSONAL_EMAIL}\n")
+    commit = repo.commit({"notes.md": f"service {service}\npersonal {PERSONAL_EMAIL}\n"})
 
     found = check(tmp_path, "history_personal_data")
 
-    assert found["status"] == "fail"
-    assert findings(found) == [{"kind": "email_in_commit_message", "commit": commit[:12]}]
+    assert findings(found) == [
+        {
+            "kind": "email_address",
+            "commit": commit[:12],
+            "path": "notes.md",
+            "line": 2,
+            "context": "personal <email_address>",
+        }
+    ]
+
+
+def test_masking_hides_public_addresses_too() -> None:
+    public = "1+me" + "@" + "users.noreply.github.com"
+    assert scan.masked(f"by {public} today", []) == "by <email_address> today"
 
 
 def test_personal_data_finds_an_address_and_a_home_path(tmp_path: Path) -> None:

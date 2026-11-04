@@ -95,10 +95,16 @@ EMAIL = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-
 # RFC 2606 で文書用に予約されたドメイン。公開してよいのは完全に一致するものだけで、
 # mail.example.net のようなサブドメインは報告する。
 EXAMPLE_DOMAINS = {"example.com", "example.org", "example.net"}
-# サービスやボットが自分のコミットに書くアドレス。個人のものではないので公開してよい。
-# Dependabot は本文に "Signed-off-by: dependabot[bot] <support@github.com>" を付ける
-# (2026-11-04 に確認)。
+# サービスが自分のコミットの署名に書くアドレス。個人のものではないので公開してよい。
+# 小文字で、アドレス全体の完全一致でだけ許す。今は Dependabot の Signed-off-by のアドレス
+# (2026-11-04 に確認) だけ。
 SERVICE_ADDRESSES = {"support@github.com"}
+# コミット本文のトレーラーのうち、名前が [bot] で終わるもののアドレスも公開してよい。
+# 例: "Signed-off-by: dependabot[bot] <...>"、"Co-authored-by: renovate[bot] <...>"。
+BOT_TRAILER = re.compile(
+    r"^(?:Signed-off-by|Co-authored-by):\s*[^<\n]*\[bot\]\s*<([^>\n]+)>\s*$",
+    re.IGNORECASE | re.MULTILINE,
+)
 # logo@2x.png のような素材のファイル名は、メールアドレスに見える。
 FILE_EXTENSIONS = {
     "png",
@@ -488,10 +494,11 @@ def is_noreply_address(address: str) -> bool:
 
 def is_public_address(address: str) -> bool:
     """本文にあるアドレス風の文字列を公開してよいかを返す。"""
-    local, _, domain = address.lower().rpartition("@")
+    lowered = address.lower()
+    local, _, domain = lowered.rpartition("@")
     return (
-        is_noreply_address(address)
-        or address.lower() in SERVICE_ADDRESSES
+        is_noreply_address(lowered)
+        or lowered in SERVICE_ADDRESSES
         or "noreply" in local
         or "no-reply" in local
         or local == "git"
@@ -500,8 +507,17 @@ def is_public_address(address: str) -> bool:
     )
 
 
+def bot_trailer_addresses(text: str) -> set[str]:
+    """名前が [bot] で終わるトレーラーに書かれたアドレス (小文字) を返す。"""
+    return {m.group(1).strip().lower() for m in BOT_TRAILER.finditer(text)}
+
+
 def has_personal_address(text: str) -> bool:
-    return any(not is_public_address(address) for address in EMAIL.findall(text))
+    bot_addresses = bot_trailer_addresses(text)
+    return any(
+        not is_public_address(address) and address.lower() not in bot_addresses
+        for address in EMAIL.findall(text)
+    )
 
 
 def has_home_path(text: str) -> bool:
@@ -578,11 +594,8 @@ def masked(text: str, denylist: list[str]) -> str:
     detected: list[Span] = []
     for kind, pattern in SECRET_PATTERNS.items():
         detected += [(m.start(), m.end(), kind) for m in pattern.finditer(text)]
-    detected += [
-        (m.start(), m.end(), "email_address")
-        for m in EMAIL.finditer(text)
-        if not is_public_address(m.group(0))
-    ]
+    # 公開してよいアドレスも伏せる。context に値を出さないためで、検出の判定とは分ける。
+    detected += [(m.start(), m.end(), "email_address") for m in EMAIL.finditer(text)]
     detected += local_path_spans(text)
     for number, term in enumerate(denylist, 1):
         detected += [
