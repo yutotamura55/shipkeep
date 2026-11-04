@@ -37,9 +37,9 @@ throughout; the steps below add what refactoring needs on top.
      untouched. Changes of behavior, new features, and new dependencies or
      settings are out of scope; if one turns out to be needed, propose a
      separate task.
-   - **Done when**: the conditions in step 6, made concrete for this work.
+   - **Done when**: the conditions in step 7, made concrete for this work.
    - **Stop when**: a limit on time or on the number of changed files, plus the
-     conditions in step 7.
+     conditions in step 8.
 3. **Pin current behavior.** Write down the inputs, outputs, state changes, and
    failure behavior of the code in scope, including order, public names and
    arguments, and error types. Read the existing tests. If they do not cover
@@ -51,11 +51,17 @@ throughout; the steps below add what refactoring needs on top.
 4. **Measure before changing.** Measure complexity and duplication of the code
    in scope as `references/measurement.md` describes, and record the tool,
    version, settings, and files.
-5. **Change in small steps.** Move one boundary at a time, and keep the build
+5. **Apply deterministic transformations first.** Before changing code by
+   hand, let tools make the changes that are the same every time, in this
+   order, and commit them separately from your own changes: the formatter, the
+   linter's fixes marked safe, the fix attached to a rule (ast-grep, Semgrep),
+   then a language codemod. Measure again afterwards, so that step 7 compares
+   your changes, not the tools'. `references/change-principles.md`, principle 7.
+6. **Change in small steps.** Move one boundary at a time, and keep the build
    and tests passing after each step. Keep commits that change behavior (there
    should be none) apart from restructuring commits. When a test fails, first
    find out whether behavior changed before you touch the test.
-6. **Check that you are done.** All of these must hold:
+7. **Check that you are done.** All of these must hold:
    1. The goal is met, shown in code. For the example goal, walk through adding
       one status message and show the change stays in one function.
    2. The tests from step 3 and all existing tests pass, and the outputs for the
@@ -71,13 +77,13 @@ throughout; the steps below add what refactoring needs on top.
    5. The diff was reviewed independently (`references/change-principles.md`),
       including the design questions below.
    6. Nothing outside the agreed scope is in the diff.
-7. **Stop** when any of these happens: the goal needs a change of behavior, the
+8. **Stop** when any of these happens: the goal needs a change of behavior, the
    agreed limit is exceeded, or there is no way to check that behavior stays
    the same. Keep the steps done so far only if the tests pass and the
    comparison inputs from step 3 still give the same outputs for them;
    otherwise undo the changes. Either way, report what you learned and what
    work remains.
-8. **Report** each item of step 6 as done or not verified, with the numbers
+9. **Report** each item of step 7 as done or not verified, with the numbers
    before and after.
 
 ## Design questions for the review

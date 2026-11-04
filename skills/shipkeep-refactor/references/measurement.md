@@ -29,3 +29,7 @@ For a language not in the table, look for the tool its official documentation or
 `scripts/hotspots.py` ranks source files by the number of recent commits that changed them times their current line count. A file that changes often and is large is where restructuring pays off most. It skips files changed only once, generated files (such as `.d.ts`), documentation, vendored directories, and build output directories (such as `dist/` and `build/`). Other generated files can still appear: check the top files before measuring them.
 
 Line count is only a proxy for size. For the top files, measure complexity with the tools above, then read the code.
+
+## Counting candidates with a rule
+
+When the refactoring targets a recurring shape of code (a handler that repeats the same guard, a class that builds the same object by hand), count the places with an ast-grep rule before and after, so that the report shows a number instead of an impression: write the pattern in `sgconfig.yml` with a `rules/` directory (or pass it with `ast-grep run --pattern`), run `ast-grep scan --json` and count the matches. The same rule, kept in the repository's check command after the refactoring, stops the shape from coming back (`references/change-principles.md`, principle 12).

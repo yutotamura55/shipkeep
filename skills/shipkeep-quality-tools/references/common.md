@@ -67,6 +67,36 @@ Why this matters: in March 2026 attackers force-pushed malicious code to most ve
 - **Dependency review** (`actions/dependency-review-action`) shows the vulnerabilities and licenses of the dependencies a pull request adds, and can fail the pull request when one is vulnerable. It is available for all public repositories; private repositories need GitHub Code Security or GitHub Advanced Security, and the dependency graph must be on ([docs](https://docs.github.com/en/code-security/concepts/supply-chain-security/dependency-review)). Propose it when the project uses GitHub Actions; pin it by SHA like any action.
 - Prefer the language's own audit (for example `pip-audit`, `npm audit`) when it exists, and OSV-Scanner for languages without one or for a single report across languages.
 
+## Turning a found type of problem into a rule
+
+When an inspection, a review, or an incident finds a type of problem that could recur ("a handler under `server/api/` that never calls `requireUser(`"), propose a rule that a tool checks on every run, in the repository's check command and CI, instead of an item for the agent to remember. Prose instructions are weak as enforcement: in a 2026 study of 1,650 Claude Code sessions, the odds that the agent followed an annotation instruction fell by about 5.6% with each function it generated, whatever the layout of the configuration file (arXiv 2605.10039, abstract read on 2026-11-03).
+
+| Tool | Writes rules in | Can attach a fix | Limits |
+| --- | --- | --- | --- |
+| ast-grep | YAML on a tree-sitter syntax tree; many languages | Yes (`fix`) | No type information, control flow, or data flow ([comparison](https://ast-grep.github.io/advanced/tool-comparison.html)) |
+| Semgrep CE / Opengrep, with the project's own rules | YAML; patterns look like code | Yes (`fix`, applied with `--autofix`, tried with `--dryrun`) | Only Semgrep-maintained rules have the limited license noted above; the project's own rules have none |
+| ESLint custom rules, `no-restricted-syntax` | JavaScript | Depends on the rule | JS/TS only |
+
+Keep the rule files in the repository (for example `sgconfig.yml` with a `rules/` directory, `.semgrep.yml`), run them from the check command, and apply Google's operating criteria for static analysis (Sadowski et al., CACM 2018): a check that blocks a build or merge needs an effective false-positive rate of zero and a mechanical fix; a check shown at review may have under 10%; when developers mark more than 10% of a rule's findings "not useful", fix or remove the rule. Record each rule's origin (the finding that led to it) and its false positives in the pull request that adds it.
+
+## Deterministic fixes first
+
+Before an agent changes code by hand, let tools make the changes that are the same every time, in this order, each in its own commit: the formatter; the linter's fixes marked safe (Ruff distinguishes safe and unsafe fixes); the fix attached to a rule (ast-grep, Semgrep); a language codemod. Google fixed every existing violation mechanically before promoting a check to an error, because warnings were ignored (CACM 2018). Codemod tools reported for each language (OpenRewrite for Java, jscodeshift and jssg for JS/TS, LibCST for Python, Comby across languages) were found through search summaries only on 2026-11-03; read their documentation before proposing one.
+
+## Baselines for existing projects
+
+A new rule on an existing project fails on old code. Instead of loosening the rule or adding suppression comments in bulk, record the existing findings once and fail only on new ones:
+
+- **ESLint bulk suppressions** (ESLint 9.24.0 and later, April 2025): `eslint --suppress-all --fix` writes the existing violations to `eslint-suppressions.json`; the rule stays `error` for new code; `--prune-suppressions` removes entries that were fixed, and leftover entries make the exit code non-zero ([docs](https://eslint.org/docs/latest/use/suppressions)).
+- **mypy-baseline**: `mypy | mypy-baseline sync` records existing errors in `mypy-baseline.txt`; `mypy | mypy-baseline filter` shows only new ones ([README](https://github.com/orsinium-labs/mypy-baseline)).
+- **Ruff** has no baseline feature (checked 2026-11-03): use the staged rollout above, starting from a configuration that existing code passes. Do not use `ruff check --add-noqa` as a baseline; it writes suppression comments into the code.
+
+Commit the baseline file, and make the check command fail when the file lists findings that no longer exist, so the baseline only shrinks (see `change-principles.md`, principle 6).
+
+## Agent hooks are aids, not enforcement
+
+Agent hooks (Claude Code's `PreToolUse` and `Stop` can block an action; `PostToolUse` cannot; checked in the official documentation on 2026-11-03) can run the check command before a commit and save a round trip. Their configuration sits where the agent can read and change it, so they never replace the required CI check and the branch ruleset, which the agent cannot bypass. Propose a hook only as a convenience, after the CI check exists.
+
 ## Propose only when the condition holds
 
 Do not add these by default. Propose one, with its condition, when the project matches.

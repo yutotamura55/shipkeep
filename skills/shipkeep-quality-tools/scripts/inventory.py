@@ -301,7 +301,34 @@ REPOSITORY_ASPECTS: tuple[tuple[str, tuple[Tool, ...], bool], ...] = (
         True,
     ),
     ("diff_coverage", (Tool("diff-cover", r"\bdiff[-_]cover\b"),), False),
+    # プロジェクト自身の lint 規則 (見つけた問題の型を機械で確かめる) と、既存の違反の baseline。
+    # どちらも、なくても不足ではない。あれば pass、なければ not_applicable にする (下の OPTIONAL_ASPECTS)。
+    (
+        "custom_rules",
+        (
+            Tool("ast-grep", files=("sgconfig.yml", "sgconfig.yaml")),
+            Tool(
+                "semgrep rules",
+                files=(".semgrep.yml", ".semgrep.yaml", ".semgrep/*.yml", ".semgrep/*.yaml"),
+            ),
+        ),
+        False,
+    ),
+    (
+        "baseline",
+        (
+            Tool("eslint bulk suppressions", files=("eslint-suppressions.json",)),
+            Tool("mypy-baseline", files=("mypy-baseline.txt",)),
+        ),
+        False,
+    ),
 )
+
+# なくても不足と報告しない観点。問題の型が見つかったときや、既存の違反が多いときに提案する。
+OPTIONAL_ASPECTS: dict[str, str] = {
+    "custom_rules": "no project-specific rule files; propose one when an inspection finds a recurring type of problem",
+    "baseline": "no baseline file; propose one when a new rule fails on existing code",
+}
 
 
 class InventoryError(Exception):
@@ -508,6 +535,9 @@ def inventory(root: Path) -> dict[str, Any]:
             )
         else:
             row.update(find(tools, files, texts))
+            if aspect in OPTIONAL_ASPECTS and row["status"] == "fail":
+                row["status"] = "not_applicable"
+                row["note"] = OPTIONAL_ASPECTS[aspect]
             if aspect == "codeql" and row["status"] == "fail":
                 # CodeQL の default setup はリポジトリの設定で、ファイルに現れない。
                 row["status"] = "unknown"
