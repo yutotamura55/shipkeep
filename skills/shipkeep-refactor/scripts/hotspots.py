@@ -15,6 +15,7 @@ import shutil
 import subprocess
 import sys
 from collections import Counter
+from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any, NoReturn
 
@@ -199,6 +200,55 @@ class QuietArgumentParser(argparse.ArgumentParser):
         raise SystemExit(2)
 
 
+RESULT_FORMAT = "shipkeep-result/1"
+TOOL_NAME = "shipkeep-refactor"
+
+
+def to_result(output: dict[str, Any], commit: str | None) -> dict[str, Any]:
+    """hotspots() の出力を shared/result.schema.json の形式にする。候補なので status は info。"""
+    items = [
+        {
+            "id": f"hotspot/{row['path']}",
+            "check": "hotspot",
+            "status": "info",
+            "confidence": "confirmed",
+            "summary": (
+                f"{row['path']}: {row['changes']} change(s) in the last "
+                f"{output['commits_counted']} commit(s), {row['lines']} line(s), "
+                f"score {row['score']}"
+            ),
+            "evidence": [
+                {
+                    "kind": "file",
+                    "path": row["path"],
+                    "detail": (
+                        f"changes={row['changes']}; lines={row['lines']}; score={row['score']}"
+                    ),
+                }
+            ],
+        }
+        for row in output["files"]
+    ]
+    result: dict[str, Any] = {
+        "format": RESULT_FORMAT,
+        "tool": {"name": TOOL_NAME},
+        "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "counts": {"info": len(items)},
+        "items": items,
+    }
+    if commit:
+        result["target"] = {"commit": commit}
+    return result
+
+
+def head_commit(root: Path) -> str | None:
+    """HEAD のコミットの SHA。読めなければ None。"""
+    try:
+        return git(root, "rev-parse", "HEAD").strip() or None
+    except (HotspotError, OSError):
+        return None
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = QuietArgumentParser(
         description=(
@@ -209,6 +259,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("repository", nargs="?", default=".", help="path inside the repository")
     parser.add_argument("--max-commits", type=int, default=500, help="recent commits to count")
     parser.add_argument("--limit", type=int, default=20, help="number of files to list")
+    parser.add_argument(
+        "--format",
+        choices=("files", "result"),
+        default="files",
+        help="output shape: files (default) or the common shipkeep result format",
+    )
     args = parser.parse_args(argv)
     if args.max_commits < 1 or args.limit < 1:
         parser.error("--max-commits and --limit must be positive")
@@ -217,6 +273,8 @@ def main(argv: list[str] | None = None) -> int:
     except HotspotError as error:
         print(f"error: {error}", file=sys.stderr)
         return 2
+    if args.format == "result":
+        result = to_result(result, head_commit(Path(args.repository)))
     print(json.dumps(result, ensure_ascii=False, indent=2))
     return 0
 

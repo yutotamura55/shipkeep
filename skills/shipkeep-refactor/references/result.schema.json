@@ -1,0 +1,92 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/yutotamura55/shipkeep/blob/main/shared/result.schema.json",
+  "title": "shipkeep result",
+  "description": "The common shape of an inspection result. Every shipkeep script prints it with --format result, and results of other tools are converted into it, so that one converter can turn any result into Issues and so that dismissed items can be matched by id across runs.",
+  "type": "object",
+  "required": ["format", "tool", "items"],
+  "additionalProperties": false,
+  "properties": {
+    "format": {
+      "const": "shipkeep-result/1",
+      "description": "Format name and major version."
+    },
+    "tool": {
+      "type": "object",
+      "required": ["name"],
+      "additionalProperties": false,
+      "properties": {
+        "name": {"type": "string", "minLength": 1, "description": "The skill or tool that produced the result, such as shipkeep-publish-check."},
+        "version": {"type": "string", "description": "Version of the tool, when it has one."}
+      }
+    },
+    "target": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "What was inspected. Never a local path.",
+      "properties": {
+        "commit": {"type": "string", "pattern": "^[0-9a-f]{7,64}$", "description": "The commit the inspection looked at."},
+        "repository": {"type": "string", "description": "owner/name on the hosting service, when known."}
+      }
+    },
+    "generated_at": {"type": "string", "format": "date-time"},
+    "counts": {
+      "type": "object",
+      "description": "Number of items per status.",
+      "additionalProperties": {"type": "integer", "minimum": 0}
+    },
+    "items": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/item"}
+    }
+  },
+  "$defs": {
+    "item": {
+      "type": "object",
+      "required": ["id", "check", "status", "summary"],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z0-9_]+(/[^\\s]+)?$",
+          "description": "Stable within a tool across runs, so that a dismissed item stays dismissed: the check id, optionally followed by / and the thing the item is about (a scope, a path)."
+        },
+        "check": {"type": "string", "minLength": 1, "description": "The check or aspect this item belongs to."},
+        "scope": {"type": "string", "description": "What part of the repository the item is about, such as a language or 'repository'."},
+        "status": {
+          "enum": ["pass", "fail", "unknown", "not_applicable", "info"],
+          "description": "pass: the check is satisfied. fail: something to fix. unknown: could not be verified. not_applicable: does not apply (see note). info: a measurement or candidate, not a judgment."
+        },
+        "severity": {
+          "enum": ["critical", "high", "medium", "low"],
+          "description": "How urgent a fail is. Omitted when status is not fail."
+        },
+        "confidence": {
+          "enum": ["confirmed", "likely", "possible"],
+          "description": "confirmed: read from the file or setting. likely: matched by a pattern or a name. possible: a weak signal that needs the user's check."
+        },
+        "summary": {"type": "string", "minLength": 1, "description": "One line, in English, without secrets or personal data."},
+        "note": {"type": "string", "description": "Why the status is unknown or not_applicable, or other context."},
+        "remediation": {"type": "string", "description": "How to fix, when the tool knows."},
+        "evidence": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/evidence"}
+        }
+      }
+    },
+    "evidence": {
+      "type": "object",
+      "required": ["kind"],
+      "additionalProperties": false,
+      "description": "Where the item was seen. Values are masked: never the secret, the address, or a local path.",
+      "properties": {
+        "kind": {"type": "string", "minLength": 1},
+        "commit": {"type": "string", "pattern": "^[0-9a-f]{7,64}$"},
+        "path": {"type": "string", "description": "Path inside the repository."},
+        "line": {"type": "integer", "minimum": 1},
+        "context": {"type": "string", "description": "The line with detected values masked."},
+        "detail": {"type": "string", "description": "Other facts as text, such as tool names or measured numbers."}
+      }
+    }
+  }
+}
