@@ -9,7 +9,7 @@
 
 | skill | いつ使うか | 内容 | 状態 |
 | --- | --- | --- | --- |
-| `shipkeep-publish-check` | 非公開のリポジトリを公開する前 | 履歴の秘密情報・個人情報、LICENSE、README、`.gitignore` などを確かめる | 初版 |
+| `shipkeep-publish-check` | 非公開のリポジトリを公開する前 | 履歴の秘密情報・個人情報、LICENSE、README、`SECURITY.md`、`.gitignore`、GitHub の設定（secret scanning、非公開の脆弱性報告、Dependabot alerts、Actions の権限）などを確かめる | 初版 |
 | `shipkeep-quality-tools` | 開発中、公開・ローンチの前 | 書式・lint・型検査・セキュリティ向けの lint・テストとカバレッジ・依存の監査・CI の不足を、どの言語でも調べ、利用者が選んだものを導入する | 初版 |
 | 定期的な点検 | 公開した後、毎週や脆弱性のアラートのとき | 新しい脆弱性の報告が自分のコードに関わるかを判断して証拠付きで報告し、利用者が承認すれば修正する | 予定 |
 | ローンチ前の点検 | 利用者に提供する前 | 既存の点検ツールの結果を、共通の形式と Issue につなぐ | 予定 |

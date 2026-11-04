@@ -1,6 +1,6 @@
 ---
 name: shipkeep-publish-check
-description: Use before making a Git repository public, or when reviewing a repository that is already public, to find secrets and personal data anywhere in its history and to check the files and settings that publishing needs (license, README, .env handling, GitHub secret scanning).
+description: Use before making a Git repository public, or when reviewing a repository that is already public, to find secrets and personal data anywhere in its history and to check the files and settings that publishing needs (license, README, SECURITY.md, .env handling, and GitHub secret scanning, vulnerability reporting, Dependabot alerts, and Actions token permissions).
 ---
 
 # Check a repository before publishing it
@@ -99,7 +99,11 @@ location, and your judgment. Then give the fixes, most urgent first.
 | `env_files` | For each local env file a project uses (`.env`, or `.dev.vars` in a Cloudflare Workers project): an ignore rule and an example file next to it | Add the ignore rule and an example file with empty values |
 | `license` | A license file at the top level of HEAD | Choose a license with the user; without one, others may not reuse the code |
 | `readme` | A non-empty README at the top level of HEAD | Write what the project is and how to use it |
-| `github_settings` | GitHub secret scanning and push protection on the `origin` repository | Turn them on in the repository's Settings → Code security |
+| `github_settings` | GitHub secret scanning and push protection on the `origin` repository | Turn them on in the repository's Settings → Advanced Security (called Code security in older GitHub pages) |
+| `security_policy` | A non-empty `SECURITY.md` at the top level, in `.github/`, or in `docs/` of HEAD, where GitHub looks for it | Write how to report a vulnerability, for example through GitHub's private reporting, without a personal email address |
+| `private_reporting` | GitHub private vulnerability reporting on the `origin` repository. Not applicable while the repository is private, because GitHub offers it only for public repositories | Turn it on in Settings → Advanced Security right after making the repository public |
+| `dependabot_alerts` | GitHub Dependabot alerts on the `origin` repository | Turn them on in Settings → Advanced Security |
+| `workflow_token` | Whether the default `GITHUB_TOKEN` of GitHub Actions can only read, and cannot approve pull requests. Once public, pull requests from strangers run workflows | In Settings → Actions → General → Workflow permissions, choose "Read repository contents and packages permissions" and clear "Allow GitHub Actions to create and approve pull requests" |
 
 Rewriting history changes commit hashes. Tell the user that it needs a force
 push, that open pull requests and forks keep the old commits, and that GitHub
@@ -123,3 +127,6 @@ State these limits in the report when they matter:
 - Files with binary extensions (images, archives, fonts) are not searched.
 - The scan does not see uncommitted files, stashes, remotes other than
   `origin`, or settings outside GitHub.
+- `private_reporting`, `dependabot_alerts`, and `workflow_token` need admin
+  access to the repository. Without it, GitHub hides the settings, so they are
+  reported as unknown rather than off.

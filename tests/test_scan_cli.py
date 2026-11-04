@@ -94,9 +94,10 @@ def test_scan_counts_the_checks_by_status(tmp_path: Path) -> None:
     result = scan.scan(tmp_path)
 
     # pass: history_coverage, commit_identity, history_secrets, history_personal_data,
-    #       sensitive_files, readme; fail: license;
-    # not_applicable: denylist, env_files, github_settings.
-    assert result["counts"] == {"pass": 6, "fail": 1, "unknown": 0, "not_applicable": 3}
+    #       sensitive_files, readme; fail: license, security_policy;
+    # not_applicable: denylist, env_files, github_settings, private_reporting,
+    #                 dependabot_alerts, workflow_token.
+    assert result["counts"] == {"pass": 6, "fail": 2, "unknown": 0, "not_applicable": 6}
 
 
 def test_executable_raises_when_the_command_is_not_on_path(
