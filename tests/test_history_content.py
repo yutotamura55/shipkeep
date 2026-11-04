@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
 from gitrepo import GitRepo
 
 import scan
@@ -245,3 +246,17 @@ def test_personal_data_ignores_text_that_only_looks_like_a_home_path(tmp_path: P
     repo.commit({"scan.py": 're.compile(r"/Users/([^/\\s]+)/")\n'})
 
     assert check(tmp_path, "history_personal_data")["status"] == "pass"
+
+
+@pytest.mark.parametrize(
+    ("path", "kind"),
+    [
+        ("infra/prod.tfvars", "terraform_variables"),
+        ("keys/id_ed25519", "private_key_file"),
+        ("android/release.keystore", "private_key_file"),
+        ("home/.netrc", "credentials_file"),
+        ("src/app.py", None),
+    ],
+)
+def test_sensitive_file_kind_covers_every_kind(path: str, kind: str | None) -> None:
+    assert scan.sensitive_file_kind(path) == kind
