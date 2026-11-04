@@ -69,8 +69,8 @@ repository: follow `references/change-principles.md` from that point.
      each with its condition;
    - for an existing project, the rollout stages (`references/common.md`,
      "Rolling out to an existing project"), and which stage this change covers;
-   - the repository settings the user must change themselves (required checks,
-     Dependabot security updates, CodeQL default setup).
+   - the repository settings the user must change themselves, from
+     `references/common.md`, "GitHub settings the user changes".
    Let the user choose. Change nothing until they approve.
 5. **Prepare the change** as `references/change-principles.md` says: check the
    working tree, create a dedicated branch, and run the existing checks once to
