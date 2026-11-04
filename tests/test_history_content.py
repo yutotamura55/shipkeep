@@ -94,6 +94,28 @@ def test_personal_data_passes_for_noreply_and_example_addresses(tmp_path: Path) 
     assert check(tmp_path, "history_personal_data")["status"] == "pass"
 
 
+def test_personal_data_passes_for_a_dependabot_commit_message(tmp_path: Path) -> None:
+    repo = GitRepo(tmp_path)
+    # Dependabot が付ける署名。アドレスは実行時に組み立てる。
+    signoff = "Signed-off-by: dependabot[bot] <" + "support" + "@" + "github.com>"
+    repo.commit({"package.json": "{}\n"}, message=f"build(deps): bump x\n\n{signoff}\n")
+
+    assert check(tmp_path, "history_personal_data")["status"] == "pass"
+
+
+def test_personal_data_still_finds_a_personal_address_next_to_a_service_address(
+    tmp_path: Path,
+) -> None:
+    repo = GitRepo(tmp_path)
+    service = "support" + "@" + "github.com"
+    commit = repo.commit({"a.txt": "x\n"}, message=f"chore\n\nCc: {service}, {PERSONAL_EMAIL}\n")
+
+    found = check(tmp_path, "history_personal_data")
+
+    assert found["status"] == "fail"
+    assert findings(found) == [{"kind": "email_in_commit_message", "commit": commit[:12]}]
+
+
 def test_personal_data_finds_an_address_and_a_home_path(tmp_path: Path) -> None:
     repo = GitRepo(tmp_path)
     commit = repo.commit({"notes.md": f"mail {PERSONAL_EMAIL}\nsee {HOME_PATH}\n"})

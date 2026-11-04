@@ -95,6 +95,10 @@ EMAIL = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-
 # RFC 2606 で文書用に予約されたドメイン。公開してよいのは完全に一致するものだけで、
 # mail.example.net のようなサブドメインは報告する。
 EXAMPLE_DOMAINS = {"example.com", "example.org", "example.net"}
+# サービスやボットが自分のコミットに書くアドレス。個人のものではないので公開してよい。
+# Dependabot は本文に "Signed-off-by: dependabot[bot] <support@github.com>" を付ける
+# (2026-11-04 に確認)。
+SERVICE_ADDRESSES = {"support@github.com"}
 # logo@2x.png のような素材のファイル名は、メールアドレスに見える。
 FILE_EXTENSIONS = {
     "png",
@@ -487,6 +491,7 @@ def is_public_address(address: str) -> bool:
     local, _, domain = address.lower().rpartition("@")
     return (
         is_noreply_address(address)
+        or address.lower() in SERVICE_ADDRESSES
         or "noreply" in local
         or "no-reply" in local
         or local == "git"
