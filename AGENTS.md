@@ -20,6 +20,7 @@ A change is **critical risk** when it cannot be undone, harms people or money ou
 - production infrastructure, deployment, or secret and environment settings;
 - publishing a release or changing signing;
 - safeguards: CI workflows, branch protection, `AGENTS.md` and other agent rules, agent permissions;
+  One change is exempt: increasing `fail_under` in `pyproject.toml` to the coverage percentage (two decimals, truncated) that a successful full run of `scripts/check.sh` reported, as "Checks before committing" requires, without narrowing the test or coverage scope and without changing any other check setting. It tightens the check and involves no judgment. Lowering it, or any other change to the check configuration, is a change to a safeguard (the user decided this on 2026-11-04).
   the skills this repository builds (`SKILL.md`, references, and scripts under `skills/`, and their originals in `shared/`) are the product, not agent rules for this repository, even when their steps change, merge, or grant permissions in a target repository. This repository's own `AGENTS.md`, CI, and branch protection remain safeguards, and a change under `skills/` or `shared/` is still critical risk when any other criterion in this section applies (for example personal data or a new dependency);
 - handling of secrets or personal data, and history rewriting;
 - irreversible external operations (sending messages to other people, deleting external resources, changing repository visibility);
