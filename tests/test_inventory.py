@@ -382,3 +382,36 @@ def test_dependency_review_is_found_in_each_way_to_write_uses(tmp_path: Path, li
     repo.commit({".github/workflows/review.yaml": "jobs:\n  r:\n    steps:\n" + line + "\n"})
 
     assert row(inventory.inventory(tmp_path), "repository", "dependency_review")["status"] == "pass"
+
+
+@pytest.mark.parametrize(
+    ("files", "aspect", "tool"),
+    [
+        ({"sgconfig.yml": "ruleDirs: [rules]\n"}, "custom_rules", "ast-grep"),
+        ({".semgrep/no-raw-sql.yml": "rules: []\n"}, "custom_rules", "semgrep rules"),
+        ({"eslint-suppressions.json": "{}\n"}, "baseline", "eslint bulk suppressions"),
+        ({"mypy-baseline.txt": ""}, "baseline", "mypy-baseline"),
+    ],
+)
+def test_project_rules_and_baselines_are_found(
+    tmp_path: Path, files: dict[str, str], aspect: str, tool: str
+) -> None:
+    repo = GitRepo(tmp_path)
+    repo.commit({"app.py": "x = 1\n", **files})
+
+    found = row(inventory.inventory(tmp_path), "repository", aspect)
+
+    assert found["status"] == "pass"
+    assert found["tools"] == [tool]
+
+
+@pytest.mark.parametrize("aspect", ["custom_rules", "baseline"])
+def test_missing_rules_or_baseline_is_not_a_failure(tmp_path: Path, aspect: str) -> None:
+    """規則と baseline は、問題の型や既存の違反があるときに提案する。ないこと自体は不足でない。"""
+    repo = GitRepo(tmp_path)
+    repo.commit({"app.py": "x = 1\n"})
+
+    found = row(inventory.inventory(tmp_path), "repository", aspect)
+
+    assert found["status"] == "not_applicable"
+    assert "propose" in found["note"]

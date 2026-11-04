@@ -35,7 +35,7 @@ repository: follow `references/change-principles.md` from that point.
    | `pass` | A tool for this aspect appears in the project |
    | `fail` | No tool for this aspect was found |
    | `unknown` | The script cannot tell (a language without a reference, or a repository setting such as CodeQL default setup) |
-   | `not_applicable` | The aspect does not apply, with a `note` |
+   | `not_applicable` | The aspect does not apply, with a `note`. `custom_rules` and `baseline` are reported this way when the files are absent: they are proposed only when a recurring type of problem or an existing backlog of findings calls for them |
 
    Each language has `detected_by`: `manifest` (a project file such as
    `pyproject.toml`) or `sources` (only source files). A language found only
@@ -67,6 +67,10 @@ repository: follow `references/change-principles.md` from that point.
      files that would change;
    - the conditional methods from `references/common.md` that fit this project,
      each with its condition;
+   - when the inspection, a review, or the user names a recurring type of
+     problem, a project-specific rule for it (`references/common.md`, "Turning
+     a found type of problem into a rule"), and when a new rule would fail on
+     existing code, a baseline ("Baselines for existing projects");
    - for an existing project, the rollout stages (`references/common.md`,
      "Rolling out to an existing project"), and which stage this change covers;
    - the repository settings the user must change themselves, from
