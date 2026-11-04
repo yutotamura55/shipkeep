@@ -302,3 +302,8 @@ def test_the_validator_applies_constraints_next_to_a_ref() -> None:
     schema = {"$defs": {"n": {"type": "integer"}}, "$ref": "#/$defs/n", "minimum": 1}
     assert validate(1, schema) == []
     assert validate(0, schema) == ["$: below 1"]
+
+
+@pytest.mark.parametrize("value", ["2026-11-04t10:00:00z", "2026-11-04T10:00:00.5+09:00"])
+def test_the_validator_accepts_rfc_3339_date_times_in_either_case(value: str) -> None:
+    assert validate(value, {"type": "string", "format": "date-time"}) == []

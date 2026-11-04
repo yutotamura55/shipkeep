@@ -43,8 +43,10 @@ ASSERTIONS = {
     "not",
 }
 SUPPORTED_FORMATS = {"date-time"}
-# RFC 3339 の date-time。時刻とタイムゾーンを必ず含む。
-DATE_TIME = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$")
+# RFC 3339 の date-time。時刻とタイムゾーンを必ず含む。T と Z は小文字でもよい (RFC 3339 5.6)。
+DATE_TIME = re.compile(
+    r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$", re.IGNORECASE
+)
 
 
 def load_schema() -> dict[str, Any]:
@@ -148,8 +150,9 @@ def _check(
 def _is_date_time(value: str) -> bool:
     if not DATE_TIME.match(value):
         return False
+    normalized = value[:-1] + "+00:00" if value[-1] in "Zz" else value
     try:
-        datetime.fromisoformat(value.replace("Z", "+00:00"))
+        datetime.fromisoformat(normalized.upper() if normalized[10] == "t" else normalized)
     except ValueError:
         return False
     return True
