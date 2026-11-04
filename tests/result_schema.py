@@ -44,8 +44,10 @@ ASSERTIONS = {
 }
 SUPPORTED_FORMATS = {"date-time"}
 # RFC 3339 の date-time。時刻とタイムゾーンを必ず含む。T と Z は小文字でもよい (RFC 3339 5.6)。
+# datetime.fromisoformat に頼らない。Python 3.10 は秒の小数が 1 桁や 2 桁の値を受け付けない。
 DATE_TIME = re.compile(
-    r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$", re.IGNORECASE
+    r"^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d+)?(?:Z|([+-])(\d{2}):(\d{2}))$",
+    re.IGNORECASE,
 )
 
 
@@ -148,11 +150,15 @@ def _check(
 
 
 def _is_date_time(value: str) -> bool:
-    if not DATE_TIME.match(value):
+    match = DATE_TIME.match(value)
+    if not match:
         return False
-    normalized = value[:-1] + "+00:00" if value[-1] in "Zz" else value
+    year, month, day, hour, minute, second = (int(part) for part in match.groups()[:6])
     try:
-        datetime.fromisoformat(normalized.upper() if normalized[10] == "t" else normalized)
+        datetime(year, month, day, hour, minute, second)
     except ValueError:
         return False
-    return True
+    offset_hour, offset_minute = match.group(8), match.group(9)
+    if offset_hour is None:
+        return True
+    return int(offset_hour) <= 23 and int(offset_minute) <= 59
