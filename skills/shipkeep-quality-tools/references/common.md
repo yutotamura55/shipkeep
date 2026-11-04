@@ -69,7 +69,7 @@ Why this matters: in March 2026 attackers force-pushed malicious code to most ve
 
 ## Turning a found type of problem into a rule
 
-When an inspection, a review, or an incident finds a type of problem that could recur ("a handler under `server/api/` that never calls `requireUser(`"), propose a rule that a tool checks on every run, in the repository's check command and CI, instead of an item for the agent to remember. Prose instructions are weak as enforcement: in a 2026 study of 1,650 Claude Code sessions, the odds that the agent followed an annotation instruction fell by about 5.6% with each function it generated, whatever the layout of the configuration file (arXiv 2605.10039, abstract read on 2026-11-03).
+When an inspection, a review, or an incident finds a type of problem that could recur ("a handler under `server/api/` that never calls `requireUser(`"), propose a rule that a tool checks on every run, in the repository's check command and CI, instead of an item for the agent to remember. Prose instructions are weak as enforcement: in a 2026 study of 1,650 Claude Code sessions, changing the layout of the configuration file made no detectable difference to whether the agent followed an annotation instruction, while within a session the odds of following it fell by about 5.6% per generated function over the observed range (not a steady decline, and an effect the authors found after the fact, not a planned analysis; arXiv 2605.10039, abstract read on 2026-11-03).
 
 | Tool | Writes rules in | Can attach a fix | Limits |
 | --- | --- | --- | --- |
@@ -77,7 +77,7 @@ When an inspection, a review, or an incident finds a type of problem that could 
 | Semgrep CE / Opengrep, with the project's own rules | YAML; patterns look like code | Yes (`fix`, applied with `--autofix`, tried with `--dryrun`) | Only Semgrep-maintained rules have the limited license noted above; the project's own rules have none |
 | ESLint custom rules, `no-restricted-syntax` | JavaScript | Depends on the rule | JS/TS only |
 
-Keep the rule files in the repository (for example `sgconfig.yml` with a `rules/` directory, `.semgrep.yml`), run them from the check command, and apply Google's operating criteria for static analysis (Sadowski et al., CACM 2018): a check that blocks a build or merge needs an effective false-positive rate of zero and a mechanical fix; a check shown at review may have under 10%; when developers mark more than 10% of a rule's findings "not useful", fix or remove the rule. Record each rule's origin (the finding that led to it) and its false positives in the pull request that adds it.
+Keep the rule files in the repository (for example `sgconfig.yml` with a `rules/` directory, `.semgrep.yml`), run them from the check command, and apply Google's operating criteria for static analysis (Sadowski et al., CACM 2018): a check that blocks a build or merge needs an effective false-positive rate of zero and, whenever possible, a mechanical fix; a check shown at review may have under 10%; when developers mark more than 10% of a rule's findings "not useful", fix or remove the rule. Record each rule's origin (the finding that led to it) and its false positives in the pull request that adds it.
 
 ## Deterministic fixes first
 
@@ -91,7 +91,7 @@ A new rule on an existing project fails on old code. Instead of loosening the ru
 - **mypy-baseline**: `mypy | mypy-baseline sync` records existing errors in `mypy-baseline.txt`; `mypy | mypy-baseline filter` shows only new ones ([README](https://github.com/orsinium-labs/mypy-baseline)).
 - **Ruff** has no baseline feature (checked 2026-11-03): use the staged rollout above, starting from a configuration that existing code passes. Do not use `ruff check --add-noqa` as a baseline; it writes suppression comments into the code.
 
-Commit the baseline file, and make the check command fail when the file lists findings that no longer exist, so the baseline only shrinks (see `change-principles.md`, principle 6).
+Commit the baseline file, and make the check command fail when the file lists findings that no longer exist, so fixed findings leave it. Pruning alone does not stop the file from growing: a change that adds a violation and its baseline entry together still passes, so review additions to the baseline file in pull requests like suppression comments (see `change-principles.md`, principle 6).
 
 ## Agent hooks are aids, not enforcement
 

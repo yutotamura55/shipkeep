@@ -32,4 +32,7 @@ Line count is only a proxy for size. For the top files, measure complexity with 
 
 ## Counting candidates with a rule
 
-When the refactoring targets a recurring shape of code (a handler that repeats the same guard, a class that builds the same object by hand), count the places with an ast-grep rule before and after, so that the report shows a number instead of an impression: write the pattern in `sgconfig.yml` with a `rules/` directory (or pass it with `ast-grep run --pattern`), run `ast-grep scan --json` and count the matches. The same rule, kept in the repository's check command after the refactoring, stops the shape from coming back (`references/change-principles.md`, principle 12).
+When the refactoring targets a recurring shape of code (a handler that repeats the same guard, a class that builds the same object by hand), count the places with an ast-grep rule before and after, so that the report shows a number instead of an impression. Two ways ([project configuration](https://ast-grep.github.io/guide/project/project-config.html)):
+
+- One-off: `ast-grep run --pattern '<pattern>' --json .` and count the matches in the JSON array.
+- Kept in the repository: write the rule as a YAML file under a directory such as `rules/`, point `sgconfig.yml` at it with `ruleDirs: [rules]`, and run `ast-grep scan --json .`. The same rule, run from the repository's check command after the refactoring, stops the shape from coming back (`references/change-principles.md`, principle 12).
