@@ -51,6 +51,8 @@ COMMIT_HASH = re.compile(r"[0-9a-f]{40}(?:[0-9a-f]{24})?")
 
 LICENSE_NAMES = {"license", "license.md", "license.txt", "licence", "licence.md", "copying"}
 README_NAMES = {"readme", "readme.md", "readme.rst", "readme.txt"}
+# GitHub がセキュリティの方針として読む場所。大文字小文字は問わない。
+SECURITY_POLICY_PATHS = {"security.md", ".github/security.md", "docs/security.md"}
 
 SECRET_PATTERNS = {
     "private_key": re.compile(r"-----BEGIN (?:[A-Z]+ )*PRIVATE KEY-----"),
@@ -836,6 +838,23 @@ def check_readme(root: Path) -> Check:
     return result("readme", "fail", "HEAD has no README at the top level")
 
 
+def check_security_policy(root: Path) -> Check:
+    """脆弱性の報告の仕方を示す SECURITY.md が、GitHub の読む場所にあるかを確かめる。"""
+    names = [name for name in tree_paths(root, "-r") if name.lower() in SECURITY_POLICY_PATHS]
+    for name in names:
+        if git(root, "show", f"HEAD:{name}").strip():
+            return result("security_policy", "pass", f"HEAD has a security policy: {name}")
+    if names:
+        return result(
+            "security_policy", "fail", f"the security policy at HEAD is empty: {names[0]}"
+        )
+    return result(
+        "security_policy",
+        "fail",
+        "HEAD has no SECURITY.md at the top level, in .github/, or in docs/",
+    )
+
+
 def github_repository(root: Path) -> str | None:
     """origin のリモートが GitHub にあれば "owner/name" を返す。"""
     url = git(root, "config", "--get", "remote.origin.url", check=False).strip()
@@ -898,6 +917,142 @@ def check_github_settings(
     return result("github_settings", "pass", "secret scanning and push protection are on")
 
 
+GhResponse = tuple[int, Any]
+HTTP_STATUS = re.compile(r"HTTP/[0-9.]+ ([0-9]{3})")
+READINESS_IDS = ("private_reporting", "dependabot_alerts", "workflow_token")
+
+
+def gh_api(path: str) -> GhResponse | None:
+    """gh CLI で GitHub API を呼び、(HTTP の状態コード, JSON の本文) を返す。
+
+    本文が空なら None を入れる。gh は 404 などで失敗の終了コードを返すが、状態コードは
+    読めるので返す。gh がない、サインインしていない、通信できないなど、HTTP の応答が
+    ないときは None を返す。gh のエラー出力にはローカルの情報が含まれることがあるため、
+    捨てる。
+    """
+    try:
+        completed = subprocess.run(
+            ["gh", "api", "--include", path],
+            capture_output=True,
+            encoding="utf-8",
+            errors="replace",
+            check=False,
+        )
+    except OSError:
+        return None
+    head, _, body = completed.stdout.replace("\r\n", "\n").partition("\n\n")
+    status = HTTP_STATUS.match(head)
+    if status is None:
+        return None
+    if not body.strip():
+        return int(status.group(1)), None
+    try:
+        return int(status.group(1)), json.loads(body)
+    except json.JSONDecodeError:
+        return None
+
+
+def readiness_results(status: str, summary: str) -> list[Check]:
+    return [result(check_id, status, summary) for check_id in READINESS_IDS]
+
+
+def check_private_reporting(repository: str, api: Callable[[str], GhResponse | None]) -> Check:
+    response = api(f"repos/{repository}/private-vulnerability-reporting")
+    if response is None or response[0] != 200 or not isinstance(response[1], dict):
+        return result("private_reporting", "unknown", "the setting could not be read with gh")
+    enabled = response[1].get("enabled")
+    if enabled is True:
+        return result("private_reporting", "pass", "private vulnerability reporting is on")
+    if enabled is not False:
+        return result("private_reporting", "unknown", "GitHub did not show whether it is on")
+    return result(
+        "private_reporting",
+        "fail",
+        "private vulnerability reporting is off",
+        [{"kind": "private_reporting_disabled"}],
+    )
+
+
+def check_dependabot_alerts(repository: str, api: Callable[[str], GhResponse | None]) -> Check:
+    # 有効なら 204、無効なら 404 を返す。404 を無効と読めるのは、呼ぶ前に管理者の
+    # 権限を確かめているため。
+    response = api(f"repos/{repository}/vulnerability-alerts")
+    if response is not None and response[0] == 204:
+        return result("dependabot_alerts", "pass", "Dependabot alerts are on")
+    if response is not None and response[0] == 404:
+        return result(
+            "dependabot_alerts",
+            "fail",
+            "Dependabot alerts are off",
+            [{"kind": "dependabot_alerts_disabled"}],
+        )
+    return result("dependabot_alerts", "unknown", "the setting could not be read with gh")
+
+
+def check_workflow_token(repository: str, api: Callable[[str], GhResponse | None]) -> Check:
+    response = api(f"repos/{repository}/actions/permissions/workflow")
+    if response is None or response[0] != 200 or not isinstance(response[1], dict):
+        return result("workflow_token", "unknown", "the setting could not be read with gh")
+    settings = response[1]
+    permissions = settings.get("default_workflow_permissions")
+    can_approve = settings.get("can_approve_pull_request_reviews")
+    findings: list[Finding] = []
+    if permissions == "write":
+        findings.append({"kind": "workflow_token_writable"})
+    if can_approve is True:
+        findings.append({"kind": "workflow_can_approve_reviews"})
+    if findings:
+        return result(
+            "workflow_token", "fail", "the default GITHUB_TOKEN can do more than read", findings
+        )
+    # 値がない、または型が違うときは、読み取りだけとも言えない。
+    if permissions != "read" or can_approve is not False:
+        return result("workflow_token", "unknown", "GitHub did not show the default permissions")
+    return result("workflow_token", "pass", "the default GITHUB_TOKEN can only read")
+
+
+def check_github_readiness(
+    root: Path, api: Callable[[str], GhResponse | None] = gh_api
+) -> list[Check]:
+    """公開した後に外部から届くものへの、GitHub の備えを確かめる。
+
+    非公開の脆弱性報告、Dependabot alerts、Actions の GITHUB_TOKEN の既定の権限。
+    これらの API は管理者にしか読めず、管理者でない人には有効な設定も 404 に見える。
+    そのため、管理者の権限を確かめられないときは、どれも確認できないとする。
+    """
+    repository = github_repository(root)
+    if repository is None:
+        return readiness_results("not_applicable", "the origin remote is not on GitHub")
+    response = api(f"repos/{repository}")
+    if response is None or response[0] != 200 or not isinstance(response[1], dict):
+        return readiness_results("unknown", "the repository could not be read with gh")
+    data = response[1]
+    permissions = data.get("permissions")
+    if not isinstance(permissions, dict) or permissions.get("admin") is not True:
+        return readiness_results(
+            "unknown", "reading these settings needs admin access to the repository"
+        )
+    visibility = data.get("private")
+    if visibility is False:
+        reporting = check_private_reporting(repository, api)
+    elif visibility is not True:
+        reporting = result(
+            "private_reporting", "unknown", "GitHub did not show whether the repository is public"
+        )
+    else:
+        reporting = result(
+            "private_reporting",
+            "not_applicable",
+            "GitHub offers it only for public repositories; turn it on right after "
+            "making the repository public",
+        )
+    return [
+        reporting,
+        check_dependabot_alerts(repository, api),
+        check_workflow_token(repository, api),
+    ]
+
+
 def hide_confidential_paths(checks: list[Check], denylist: list[str]) -> None:
     """秘密情報、個人情報、禁止語を含む指摘のパスをすべて置き換える。"""
     for check in checks:
@@ -923,6 +1078,7 @@ CHECK_IDS = (
     "env_files",
     "license",
     "readme",
+    "security_policy",
 )
 
 
@@ -946,8 +1102,10 @@ def scan(root: Path, denylist: list[str] | None = None) -> dict[str, Any]:
             check_env_files(root),
             check_license(root),
             check_readme(root),
+            check_security_policy(root),
         ]
     checks.append(check_github_settings(root))
+    checks.extend(check_github_readiness(root))
     hide_confidential_paths(checks, denylist or [])
     counts = {
         status: sum(1 for check in checks if check["status"] == status)
