@@ -460,8 +460,17 @@ def find(tools: tuple[Tool, ...], files: list[str], texts: dict[str, str]) -> Ro
     }
 
 
-def inventory(root: Path) -> dict[str, Any]:
-    """リポジトリを調べ、言語ごとの観点と、言語を問わない観点の結果を返す。"""
+KNOWN_LANGUAGE_IDS = tuple(lang.id for lang in REFERENCED_LANGUAGES) + tuple(
+    row[0] for row in OTHER_LANGUAGES
+)
+
+
+def inventory(root: Path, declared: tuple[str, ...] = ()) -> dict[str, Any]:
+    """リポジトリを調べ、言語ごとの観点と、言語を問わない観点の結果を返す。
+
+    declared は、ファイルがまだなくても使う予定の言語の ID。見つからなかった言語でも、
+    declared にあれば detected_by を "declared" にして観点を挙げる。
+    """
     top, files = tracked_files(root)
     texts = read_configs(top, files)
 
@@ -469,17 +478,25 @@ def inventory(root: Path) -> dict[str, Any]:
     rows: list[Row] = []
     extensions = Counter(PurePosixPath(f).suffix[1:].lower() for f in files)
 
-    def detect(markers: tuple[str, ...], exts: tuple[str, ...]) -> tuple[list[str], str]:
-        """マニフェストか、ソースのファイルで言語を見分け、根拠と見分け方を返す。"""
+    def detect(
+        language_id: str, markers: tuple[str, ...], exts: tuple[str, ...]
+    ) -> tuple[list[str], str]:
+        """マニフェストか、ソースのファイルで言語を見分け、根拠と見分け方を返す。
+
+        どちらもなく、declared にある言語は、根拠なしの "declared" として返す。
+        見つからなければ根拠は空で、呼び出し側が飛ばす。
+        """
         manifests = [f for f in files if any(matches(f, p) for p in markers)]
         if manifests:
             return manifests, "manifest"
         sources = [f for f in files if PurePosixPath(f).suffix[1:].lower() in exts]
+        if not sources and language_id in declared:
+            return [], "declared"
         return sources, "sources"
 
     for language in REFERENCED_LANGUAGES:
-        markers, detected_by = detect(language.markers, language.extensions)
-        if not markers:
+        markers, detected_by = detect(language.id, language.markers, language.extensions)
+        if not markers and detected_by != "declared":
             continue
         languages.append(
             {
@@ -497,8 +514,8 @@ def inventory(root: Path) -> dict[str, Any]:
             row.update(find(language.aspects[aspect], files, own_texts))
             rows.append(row)
     for language_id, name, patterns, exts in OTHER_LANGUAGES:
-        markers, detected_by = detect(patterns, exts)
-        if not markers:
+        markers, detected_by = detect(language_id, patterns, exts)
+        if not markers and detected_by != "declared":
             continue
         languages.append(
             {
@@ -593,9 +610,20 @@ def main(argv: list[str] | None = None) -> int:
         )
     )
     parser.add_argument("repository", nargs="?", default=".", help="path inside the repository")
+    parser.add_argument(
+        "--language",
+        action="append",
+        default=[],
+        choices=KNOWN_LANGUAGE_IDS,
+        metavar="ID",
+        help=(
+            "a language the project will use even if no file shows it yet "
+            "(repeatable); one of: " + ", ".join(KNOWN_LANGUAGE_IDS)
+        ),
+    )
     args = parser.parse_args(argv)
     try:
-        result = inventory(Path(args.repository))
+        result = inventory(Path(args.repository), tuple(args.language))
     except InventoryError as error:
         print(f"error: {error}", file=sys.stderr)
         return 2
