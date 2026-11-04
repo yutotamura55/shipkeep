@@ -497,8 +497,9 @@ def test_an_oversized_config_file_is_not_read(
     result = inventory.inventory(tmp_path)
 
     rows = {row["aspect"]: row for row in result["aspects"] if row["scope"] == "python"}
-    # 大きすぎる設定は本文を読まないため、Ruff は見つからない。言語は名前で見分ける。
-    assert rows["format"]["status"] == "fail"
+    # 大きすぎる設定は本文を読まないため、[tool.ruff] があっても lint の Ruff は見つからない。
+    # 言語は名前で見分ける。
+    assert rows["lint"]["status"] == "fail"
     assert [lang["id"] for lang in result["languages"]] == ["python"]
 
 
@@ -519,4 +520,4 @@ def test_an_unreadable_config_file_is_skipped(
     result = inventory.inventory(tmp_path)
 
     rows = {row["aspect"]: row for row in result["aspects"] if row["scope"] == "python"}
-    assert rows["format"]["status"] == "fail"
+    assert rows["lint"]["status"] == "fail"
