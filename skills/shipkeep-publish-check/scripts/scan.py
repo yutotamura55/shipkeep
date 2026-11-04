@@ -15,7 +15,9 @@ import argparse
 import ast
 import fnmatch
 import json
+import os
 import re
+import shutil
 import subprocess
 import sys
 from collections.abc import Callable, Iterator
@@ -221,8 +223,20 @@ TEST_PATHSPECS = (
 HIDDEN_PATH = "(hidden: the path contains confidential text)"
 
 
+def executable(name: str) -> str:
+    """PATH にある実行ファイルの絶対パスを返す。見つからなければ ``OSError`` を送出する。
+
+    起動の時点で探し直さず、ここで一度だけ絶対パスに決める。
+    """
+    path = shutil.which(name)
+    if path is None:
+        raise OSError(f"{name} is not on PATH")
+    # PATH に相対のディレクトリや空の項目があると、which は相対パスや名前だけを返す。
+    return os.path.abspath(path)
+
+
 def git_command(root: Path, *args: str) -> list[str]:
-    command = ["git", "-C", str(root)]
+    command = [executable("git"), "-C", str(root)]
     for setting in GIT_SETTINGS:
         command += ["-c", setting]
     return [*command, *args]
@@ -230,14 +244,18 @@ def git_command(root: Path, *args: str) -> list[str]:
 
 def git(root: Path, *args: str, check: bool = True) -> str:
     """読み取り専用の Git コマンドを ``root`` で実行し、標準出力を返す。"""
-    completed = subprocess.run(git_command(root, *args), capture_output=True, check=check)
+    # 引数はリストで、シェルを通さない。外から来る値は、オプションの値 (-C のパス)、
+    # 接頭辞付きの位置引数 (HEAD:<パス>、repos/<名前>)、または -- の後に置く。
+    completed = subprocess.run(git_command(root, *args), capture_output=True, check=check)  # noqa: S603
     # 手作業でデコードする。テキストモードではファイル内の単独の CR が LF に変わり、
     # patch の行を偽造できてしまう。
     return completed.stdout.decode("utf-8", errors="replace")
 
 
 def git_succeeds(root: Path, *args: str) -> bool:
-    completed = subprocess.run(git_command(root, *args), capture_output=True, check=False)
+    # 引数はリストで、シェルを通さない。外から来る値は、オプションの値 (-C のパス)、
+    # 接頭辞付きの位置引数 (HEAD:<パス>、repos/<名前>)、または -- の後に置く。
+    completed = subprocess.run(git_command(root, *args), capture_output=True, check=False)  # noqa: S603
     return completed.returncode == 0
 
 
@@ -846,8 +864,9 @@ def fetch_security_settings(repository: str) -> dict[str, Any] | None:
     gh のエラー出力にはローカルの情報が含まれることがあるため、捨てる。
     """
     try:
-        completed = subprocess.run(
-            ["gh", "api", f"repos/{repository}"],
+        # 引数はリストで、シェルを通さない。リポジトリの名前は repos/ を付けて渡す。
+        completed = subprocess.run(  # noqa: S603
+            [executable("gh"), "api", f"repos/{repository}"],
             capture_output=True,
             encoding="utf-8",
             errors="replace",
@@ -908,8 +927,10 @@ def gh_api(path: str) -> GhResponse | None:
     捨てる。
     """
     try:
-        completed = subprocess.run(
-            ["gh", "api", "--include", path],
+        # 引数はリストで、シェルを通さない。path は repos/ で始まる API のパスで、
+        # このファイルの中で組み立てる。
+        completed = subprocess.run(  # noqa: S603
+            [executable("gh"), "api", "--include", path],
             capture_output=True,
             encoding="utf-8",
             errors="replace",

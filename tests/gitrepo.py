@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 from pathlib import Path
 
+# テストで起動する git。PATH で一度だけ探し、絶対パスで渡す。
+GIT = shutil.which("git") or "git"
 NOREPLY_EMAIL = "12345+tester@users.noreply.github.com"
 
 
@@ -27,8 +30,8 @@ class GitRepo:
             "GIT_CONFIG_NOSYSTEM": "1",
             "GIT_CONFIG_GLOBAL": os.devnull,
         }
-        result = subprocess.run(
-            ["git", "-C", str(self.path), *args],
+        result = subprocess.run(  # noqa: S603 (テスト用の git を固定の引数で起動する)
+            [GIT, "-C", str(self.path), *args],
             capture_output=True,
             text=True,
             check=check,

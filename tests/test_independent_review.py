@@ -7,7 +7,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
-from gitrepo import GitRepo
+from gitrepo import GIT, GitRepo
 
 import scan
 
@@ -59,7 +59,7 @@ def test_a_remote_url_that_is_not_utf8_does_not_crash(
 ) -> None:
     repo = GitRepo(tmp_path)
     repo.commit({"a.txt": "a\n"})
-    subprocess.run(
+    subprocess.run(  # noqa: S603 (テスト用の git を固定の引数で起動する)
         [b"git", b"-C", bytes(tmp_path), b"config", b"remote.origin.url", b"https://h/\xff"],
         check=True,
     )
@@ -123,8 +123,8 @@ def test_history_coverage_depends_on_how_the_repository_was_cloned(
     source.commit({"b.txt": "b\n"})
     source.git("branch", "other")
     clone = tmp_path / "clone"
-    subprocess.run(
-        ["git", "clone", "--quiet", *options, f"file://{tmp_path / 'source'}", str(clone)],
+    subprocess.run(  # noqa: S603 (テスト用の git を固定の引数で起動する)
+        [GIT, "clone", "--quiet", *options, f"file://{tmp_path / 'source'}", str(clone)],
         check=True,
     )
 
@@ -248,11 +248,11 @@ def test_a_negative_fetch_refspec_makes_coverage_unknown(tmp_path: Path) -> None
     source = GitRepo(tmp_path / "source")
     source.commit({"a.txt": "a\n"})
     clone = tmp_path / "clone"
-    subprocess.run(
-        ["git", "clone", "--quiet", f"file://{tmp_path / 'source'}", str(clone)], check=True
+    subprocess.run(  # noqa: S603 (テスト用の git を固定の引数で起動する)
+        [GIT, "clone", "--quiet", f"file://{tmp_path / 'source'}", str(clone)], check=True
     )
-    subprocess.run(
-        ["git", "-C", str(clone), "config", "--add", "remote.origin.fetch", "^refs/heads/old"],
+    subprocess.run(  # noqa: S603 (テスト用の git を固定の引数で起動する)
+        [GIT, "-C", str(clone), "config", "--add", "remote.origin.fetch", "^refs/heads/old"],
         check=True,
     )
 
