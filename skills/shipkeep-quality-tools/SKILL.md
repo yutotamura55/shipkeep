@@ -38,9 +38,13 @@ repository: follow `references/change-principles.md` from that point.
    | `not_applicable` | The aspect does not apply, with a `note`. `custom_rules` and `baseline` are reported this way when the files are absent: they are proposed only when a recurring type of problem or an existing backlog of findings calls for them |
 
    Each language has `detected_by`: `manifest` (a project file such as
-   `pyproject.toml`) or `sources` (only source files). A language found only
-   by sources may be a few helper scripts: ask the user whether it needs tools
-   before proposing any. `unrecognized_source_extensions` lists source file
+   `pyproject.toml`), `sources` (only source files), or `declared` (passed
+   with `--language`). A language found only by sources may be a few helper
+   scripts: ask the user whether it needs tools before proposing any. When
+   `languages` is empty or lacks a language the project will use (a new
+   repository, or a part not written yet), ask the user which languages to
+   plan for and run the script again with `--language <id>` for each, so that
+   their aspects appear as rows; `--help` lists the ids. `unrecognized_source_extensions` lists source file
    extensions of languages the script does not know; decide the language from
    them and research its tools as for a language without a reference.
 
@@ -91,6 +95,11 @@ repository: follow `references/change-principles.md` from that point.
      actions pinned to SHAs you looked up, `persist-credentials: false`, and
      minimal `permissions`.
    - Set the coverage floor to the coverage you measure now, not to a guess.
+     Write the measured value truncated, not rounded, to the digits of the
+     floor (`references/common.md`, "Coverage").
+   - Audit the dependencies of the check tools too, not only the project's,
+     when they are installed as packages (`references/common.md`,
+     "Dependencies").
 7. **Verify.** Run the check command and, if you changed workflows, actionlint
    and zizmor on them. Record the findings each new tool reports on the
    existing code and the measured coverage. Fix findings only if the approved

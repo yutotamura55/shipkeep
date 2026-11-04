@@ -415,3 +415,54 @@ def test_missing_rules_or_baseline_is_not_a_failure(tmp_path: Path, aspect: str)
 
     assert found["status"] == "not_applicable"
     assert "propose" in found["note"]
+
+
+def test_a_declared_language_is_listed_before_any_file_exists(tmp_path: Path) -> None:
+    repo = GitRepo(tmp_path)
+    repo.commit({"LICENSE": "MIT\n"})
+
+    result = inventory.inventory(tmp_path, declared=("python", "javascript", "go"))
+
+    found = {lang["id"]: lang for lang in result["languages"]}
+    assert set(found) == {"python", "javascript", "go"}
+    assert all(
+        lang["detected_by"] == "declared" and lang["evidence"] == [] for lang in found.values()
+    )
+    python_rows = [row for row in result["aspects"] if row["scope"] == "python"]
+    assert python_rows and all(row["status"] == "fail" for row in python_rows)
+    go_rows = [row for row in result["aspects"] if row["scope"] == "go"]
+    assert go_rows and all(row["status"] == "unknown" for row in go_rows)
+
+
+def test_a_declared_language_that_files_show_keeps_its_evidence(tmp_path: Path) -> None:
+    repo = GitRepo(tmp_path)
+    repo.commit({"pyproject.toml": "[project]\nname = 'x'\n"})
+
+    result = inventory.inventory(tmp_path, declared=("python",))
+
+    (python,) = result["languages"]
+    assert python["detected_by"] == "manifest"
+    assert python["evidence"] == ["pyproject.toml"]
+
+
+def test_main_accepts_repeated_language_options(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    repo = GitRepo(tmp_path)
+    repo.commit({"LICENSE": "MIT\n"})
+
+    assert inventory.main([str(tmp_path), "--language", "python", "--language", "javascript"]) == 0
+
+    result = json.loads(capsys.readouterr().out)
+    assert [lang["id"] for lang in result["languages"]] == ["python", "javascript"]
+
+
+def test_main_rejects_an_unknown_language(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    with pytest.raises(SystemExit) as exit_info:
+        inventory.main([str(tmp_path), "--language", "cobol"])
+
+    assert exit_info.value.code == 2
+    # 誤って渡した値 (パスなど) を含めないため、argparse の文ではなく定型の文を出す。
+    assert "cobol" not in capsys.readouterr().err

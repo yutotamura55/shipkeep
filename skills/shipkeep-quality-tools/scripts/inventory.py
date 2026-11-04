@@ -460,8 +460,17 @@ def find(tools: tuple[Tool, ...], files: list[str], texts: dict[str, str]) -> Ro
     }
 
 
-def inventory(root: Path) -> dict[str, Any]:
-    """リポジトリを調べ、言語ごとの観点と、言語を問わない観点の結果を返す。"""
+KNOWN_LANGUAGE_IDS = tuple(lang.id for lang in REFERENCED_LANGUAGES) + tuple(
+    row[0] for row in OTHER_LANGUAGES
+)
+
+
+def inventory(root: Path, declared: tuple[str, ...] = ()) -> dict[str, Any]:
+    """リポジトリを調べ、言語ごとの観点と、言語を問わない観点の結果を返す。
+
+    declared は、ファイルがまだなくても使う予定の言語の ID。見つからなかった言語でも、
+    declared にあれば detected_by を "declared" にして観点を挙げる。
+    """
     top, files = tracked_files(root)
     texts = read_configs(top, files)
 
@@ -479,7 +488,9 @@ def inventory(root: Path) -> dict[str, Any]:
 
     for language in REFERENCED_LANGUAGES:
         markers, detected_by = detect(language.markers, language.extensions)
-        if not markers:
+        if not markers and language.id in declared:
+            detected_by = "declared"
+        elif not markers:
             continue
         languages.append(
             {
@@ -498,7 +509,9 @@ def inventory(root: Path) -> dict[str, Any]:
             rows.append(row)
     for language_id, name, patterns, exts in OTHER_LANGUAGES:
         markers, detected_by = detect(patterns, exts)
-        if not markers:
+        if not markers and language_id in declared:
+            detected_by = "declared"
+        elif not markers:
             continue
         languages.append(
             {
@@ -593,9 +606,20 @@ def main(argv: list[str] | None = None) -> int:
         )
     )
     parser.add_argument("repository", nargs="?", default=".", help="path inside the repository")
+    parser.add_argument(
+        "--language",
+        action="append",
+        default=[],
+        choices=KNOWN_LANGUAGE_IDS,
+        metavar="ID",
+        help=(
+            "a language the project will use even if no file shows it yet "
+            "(repeatable); one of: " + ", ".join(KNOWN_LANGUAGE_IDS)
+        ),
+    )
     args = parser.parse_args(argv)
     try:
-        result = inventory(Path(args.repository))
+        result = inventory(Path(args.repository), tuple(args.language))
     except InventoryError as error:
         print(f"error: {error}", file=sys.stderr)
         return 2
