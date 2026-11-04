@@ -454,7 +454,8 @@ def test_main_accepts_repeated_language_options(
     assert inventory.main([str(tmp_path), "--language", "python", "--language", "javascript"]) == 0
 
     result = json.loads(capsys.readouterr().out)
-    assert [lang["id"] for lang in result["languages"]] == ["python", "javascript"]
+    # 並びは表 (REFERENCED_LANGUAGES、OTHER_LANGUAGES) の順で、引数の順ではない。
+    assert {lang["id"] for lang in result["languages"]} == {"python", "javascript"}
 
 
 def test_main_rejects_an_unknown_language(

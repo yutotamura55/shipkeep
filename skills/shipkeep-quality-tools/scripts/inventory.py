@@ -478,19 +478,25 @@ def inventory(root: Path, declared: tuple[str, ...] = ()) -> dict[str, Any]:
     rows: list[Row] = []
     extensions = Counter(PurePosixPath(f).suffix[1:].lower() for f in files)
 
-    def detect(markers: tuple[str, ...], exts: tuple[str, ...]) -> tuple[list[str], str]:
-        """マニフェストか、ソースのファイルで言語を見分け、根拠と見分け方を返す。"""
+    def detect(
+        language_id: str, markers: tuple[str, ...], exts: tuple[str, ...]
+    ) -> tuple[list[str], str]:
+        """マニフェストか、ソースのファイルで言語を見分け、根拠と見分け方を返す。
+
+        どちらもなく、declared にある言語は、根拠なしの "declared" として返す。
+        見つからなければ根拠は空で、呼び出し側が飛ばす。
+        """
         manifests = [f for f in files if any(matches(f, p) for p in markers)]
         if manifests:
             return manifests, "manifest"
         sources = [f for f in files if PurePosixPath(f).suffix[1:].lower() in exts]
+        if not sources and language_id in declared:
+            return [], "declared"
         return sources, "sources"
 
     for language in REFERENCED_LANGUAGES:
-        markers, detected_by = detect(language.markers, language.extensions)
-        if not markers and language.id in declared:
-            detected_by = "declared"
-        elif not markers:
+        markers, detected_by = detect(language.id, language.markers, language.extensions)
+        if not markers and detected_by != "declared":
             continue
         languages.append(
             {
@@ -508,10 +514,8 @@ def inventory(root: Path, declared: tuple[str, ...] = ()) -> dict[str, Any]:
             row.update(find(language.aspects[aspect], files, own_texts))
             rows.append(row)
     for language_id, name, patterns, exts in OTHER_LANGUAGES:
-        markers, detected_by = detect(patterns, exts)
-        if not markers and language_id in declared:
-            detected_by = "declared"
-        elif not markers:
+        markers, detected_by = detect(language_id, patterns, exts)
+        if not markers and detected_by != "declared":
             continue
         languages.append(
             {

@@ -27,8 +27,9 @@ repository: follow `references/change-principles.md` from that point.
    It prints one JSON document: the languages it found (`languages`), and one
    row per aspect (`aspects`) with `status`, the tools it found, and the files
    that show them (`evidence`). It reads tracked files only. Exit code 2 means
-   the path is not in a Git repository or Git failed; report the message and
-   stop.
+   the path is not in a Git repository, Git failed, or an argument is invalid
+   (for example an unknown `--language` id; `--help` lists them). Read the
+   message, fix the call if it was the arguments, otherwise report and stop.
 
    | Status | Meaning |
    | --- | --- |
@@ -44,9 +45,10 @@ repository: follow `references/change-principles.md` from that point.
    `languages` is empty or lacks a language the project will use (a new
    repository, or a part not written yet), ask the user which languages to
    plan for and run the script again with `--language <id>` for each, so that
-   their aspects appear as rows; `--help` lists the ids. `unrecognized_source_extensions` lists source file
-   extensions of languages the script does not know; decide the language from
-   them and research its tools as for a language without a reference.
+   their aspects appear as rows; `--help` lists the ids.
+   `unrecognized_source_extensions` lists source file extensions of languages
+   the script does not know; decide the language from them and research its
+   tools as for a language without a reference.
 
 2. **Confirm the evidence.** The script matches names; it does not prove that a
    tool is configured or runs. Open the evidence files and check:
@@ -95,8 +97,9 @@ repository: follow `references/change-principles.md` from that point.
      actions pinned to SHAs you looked up, `persist-credentials: false`, and
      minimal `permissions`.
    - Set the coverage floor to the coverage you measure now, not to a guess.
-     Write the measured value truncated, not rounded, to the digits of the
-     floor (`references/common.md`, "Coverage").
+     Write the measured value truncated, not rounded, and set the report
+     precision so that the comparison sees those digits
+     (`references/common.md`, "Coverage").
    - Audit the dependencies of the check tools too, not only the project's,
      when they are installed as packages (`references/common.md`,
      "Dependencies").
