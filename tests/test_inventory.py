@@ -467,3 +467,56 @@ def test_main_rejects_an_unknown_language(
     assert exit_info.value.code == 2
     # 誤って渡した値 (パスなど) を含めないため、argparse の文ではなく定型の文を出す。
     assert "cobol" not in capsys.readouterr().err
+
+
+def test_a_failing_git_ls_files_is_reported(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = GitRepo(tmp_path)
+    repo.commit({"app.py": "x = 1\n"})
+    real_run_git = inventory.run_git
+
+    def failing_ls_files(git: str, root: Path, *args: str) -> tuple[int, str]:
+        if args[:1] == ("ls-files",):
+            return 128, ""
+        return real_run_git(git, root, *args)
+
+    monkeypatch.setattr(inventory, "run_git", failing_ls_files)
+
+    with pytest.raises(inventory.InventoryError, match="ls-files"):
+        inventory.inventory(tmp_path)
+
+
+def test_an_oversized_config_file_is_not_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = GitRepo(tmp_path)
+    repo.commit({"pyproject.toml": "[tool.ruff]\nline-length = 100\n" + "#" * 200 + "\n"})
+    monkeypatch.setattr(inventory, "MAX_CONFIG_BYTES", 100)
+
+    result = inventory.inventory(tmp_path)
+
+    rows = {row["aspect"]: row for row in result["aspects"] if row["scope"] == "python"}
+    # 大きすぎる設定は本文を読まないため、Ruff は見つからない。言語は名前で見分ける。
+    assert rows["format"]["status"] == "fail"
+    assert [lang["id"] for lang in result["languages"]] == ["python"]
+
+
+def test_an_unreadable_config_file_is_skipped(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = GitRepo(tmp_path)
+    repo.commit({"pyproject.toml": "[tool.ruff]\n"})
+    real_read_text = Path.read_text
+
+    def unreadable(self: Path, encoding: str | None = None, errors: str | None = None) -> str:
+        if self.name == "pyproject.toml":
+            raise OSError("permission denied")
+        return real_read_text(self, encoding=encoding, errors=errors)
+
+    monkeypatch.setattr(Path, "read_text", unreadable)
+
+    result = inventory.inventory(tmp_path)
+
+    rows = {row["aspect"]: row for row in result["aspects"] if row["scope"] == "python"}
+    assert rows["format"]["status"] == "fail"
