@@ -41,8 +41,8 @@ branch = true
 [tool.coverage.report]
 show_missing = true
 skip_covered = true
-# 2026-11-04 に main を取り込んだ後に測った値を、小数第 2 位で切り捨てた値。
+# 2026-11-04 に測った値を、小数第 2 位で切り捨てた値。
 # 丸めると、pytest-cov が下限に届かない (FAIL) と表示しながら成功する。
 # 下回ったら失敗にする。テストを足して上がったら、この値も上げる。
-fail_under = 96.44
+fail_under = 96.46
 precision = 2

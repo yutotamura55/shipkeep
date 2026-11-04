@@ -407,7 +407,7 @@ def test_project_rules_and_baselines_are_found(
 
 @pytest.mark.parametrize("aspect", ["custom_rules", "baseline"])
 def test_missing_rules_or_baseline_is_not_a_failure(tmp_path: Path, aspect: str) -> None:
-    """規則と baseline は、問題の型や既存の違反があるときに提案するもので、ないこと自体は不足でない。"""
+    """規則と baseline は、問題の型や既存の違反があるときに提案する。ないこと自体は不足でない。"""
     repo = GitRepo(tmp_path)
     repo.commit({"app.py": "x = 1\n"})
 

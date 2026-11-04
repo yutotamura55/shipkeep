@@ -302,7 +302,8 @@ REPOSITORY_ASPECTS: tuple[tuple[str, tuple[Tool, ...], bool], ...] = (
     ),
     ("diff_coverage", (Tool("diff-cover", r"\bdiff[-_]cover\b"),), False),
     # プロジェクト自身の lint 規則 (見つけた問題の型を機械で確かめる) と、既存の違反の baseline。
-    # どちらも、なくても不足ではない。あれば pass、なければ not_applicable にする (下の OPTIONAL_ASPECTS)。
+    # どちらも、なくても不足ではない。あれば pass、なければ not_applicable にする
+    # (下の OPTIONAL_ASPECTS)。
     (
         "custom_rules",
         (
@@ -326,7 +327,10 @@ REPOSITORY_ASPECTS: tuple[tuple[str, tuple[Tool, ...], bool], ...] = (
 
 # なくても不足と報告しない観点。問題の型が見つかったときや、既存の違反が多いときに提案する。
 OPTIONAL_ASPECTS: dict[str, str] = {
-    "custom_rules": "no project-specific rule files; propose one when an inspection finds a recurring type of problem",
+    "custom_rules": (
+        "no project-specific rule files; "
+        "propose one when an inspection finds a recurring type of problem"
+    ),
     "baseline": "no baseline file; propose one when a new rule fails on existing code",
 }
 
