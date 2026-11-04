@@ -103,14 +103,15 @@ def test_personal_data_passes_for_a_dependabot_commit_message(tmp_path: Path) ->
     assert check(tmp_path, "history_personal_data")["status"] == "pass"
 
 
-def test_personal_data_passes_for_a_bot_trailer_with_another_service_address(
-    tmp_path: Path,
-) -> None:
+def test_personal_data_reports_a_bot_named_trailer_with_an_unknown_address(tmp_path: Path) -> None:
     repo = GitRepo(tmp_path)
-    trailer = "Co-authored-by: renovate[bot] <" + "bot" + "@" + "renovateapp.com>"
-    repo.commit({"a.txt": "x\n"}, message=f"chore(deps)\n\n{trailer}\n")
+    # 名前の [bot] だけでは許さない。アドレスが SERVICE_ADDRESSES になければ個人のものとして扱う。
+    trailer = f"Co-authored-by: someone[bot] <{PERSONAL_EMAIL}>"
+    commit = repo.commit({"a.txt": "x\n"}, message=f"chore\n\n{trailer}\n")
 
-    assert check(tmp_path, "history_personal_data")["status"] == "pass"
+    assert findings(check(tmp_path, "history_personal_data")) == [
+        {"kind": "email_in_commit_message", "commit": commit[:12]}
+    ]
 
 
 def test_personal_data_reports_a_trailer_whose_name_is_not_a_bot(tmp_path: Path) -> None:

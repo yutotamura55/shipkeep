@@ -99,12 +99,9 @@ EXAMPLE_DOMAINS = {"example.com", "example.org", "example.net"}
 # 小文字で、アドレス全体の完全一致でだけ許す。今は Dependabot の Signed-off-by のアドレス
 # (2026-11-04 に確認) だけ。
 SERVICE_ADDRESSES = {"support@github.com"}
-# コミット本文のトレーラーのうち、名前が [bot] で終わるもののアドレスも公開してよい。
-# 例: "Signed-off-by: dependabot[bot] <...>"、"Co-authored-by: renovate[bot] <...>"。
-BOT_TRAILER = re.compile(
-    r"^(?:Signed-off-by|Co-authored-by):\s*[^<\n]*\[bot\]\s*<([^>\n]+)>\s*$",
-    re.IGNORECASE | re.MULTILINE,
-)
+# 名前が [bot] で終わるトレーラーのアドレスを一律に許す規則は置かない。名前は誰でも書けるので、
+# 個人のアドレスを隠す抜け道になる (2026-11-04 の独立レビューで確認)。ボットを足すときは、
+# そのボットが実際に使うアドレスを確かめて SERVICE_ADDRESSES に書く。
 # logo@2x.png のような素材のファイル名は、メールアドレスに見える。
 FILE_EXTENSIONS = {
     "png",
@@ -507,17 +504,8 @@ def is_public_address(address: str) -> bool:
     )
 
 
-def bot_trailer_addresses(text: str) -> set[str]:
-    """名前が [bot] で終わるトレーラーに書かれたアドレス (小文字) を返す。"""
-    return {m.group(1).strip().lower() for m in BOT_TRAILER.finditer(text)}
-
-
 def has_personal_address(text: str) -> bool:
-    bot_addresses = bot_trailer_addresses(text)
-    return any(
-        not is_public_address(address) and address.lower() not in bot_addresses
-        for address in EMAIL.findall(text)
-    )
+    return any(not is_public_address(address) for address in EMAIL.findall(text))
 
 
 def has_home_path(text: str) -> bool:
