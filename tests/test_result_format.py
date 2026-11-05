@@ -342,3 +342,64 @@ def test_the_end_anchor_does_not_accept_a_trailing_newline() -> None:
 
 def test_patterns_without_an_end_anchor_match_anywhere() -> None:
     assert validate("a readme\n", {"type": "string", "pattern": "readme"}) == []
+
+
+def test_scan_remediations_match_the_skill_md_table() -> None:
+    skill_md = (
+        Path(__file__).resolve().parents[1] / "skills/shipkeep-publish-check/SKILL.md"
+    ).read_text(encoding="utf-8")
+    rows = {}
+    for line in skill_md.splitlines():
+        cells = [cell.strip() for cell in line.strip().strip("|").split(" | ")]
+        if len(cells) == 3 and cells[0].startswith("`") and cells[0].endswith("`"):
+            rows[cells[0].strip("`")] = cells[2].replace("**", "")
+    assert set(scan.REMEDIATIONS) == set(scan.SEVERITIES)
+    for check_id, text in scan.REMEDIATIONS.items():
+        assert rows[check_id] == text, check_id
+
+
+def test_scan_result_puts_the_remediation_on_failed_items(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    make_repo(tmp_path)
+
+    document = run(scan.main, [str(tmp_path), "--format", "result"], capsys)
+
+    for item in document["items"]:
+        assert ("remediation" in item) == (item["status"] == "fail"), item["id"]
+    assert validate(document) == []
+
+
+def test_inventory_has_a_remediation_for_every_aspect_that_can_fail() -> None:
+    for language in inventory.REFERENCED_LANGUAGES:
+        for aspect in inventory.LANGUAGE_ASPECTS:
+            row = {"aspect": aspect, "scope": language.id, "status": "fail"}
+            assert inventory.remediation(row), (language.id, aspect)
+    for aspect, _, _ in inventory.REPOSITORY_ASPECTS:
+        if aspect in inventory.OPTIONAL_ASPECTS or aspect == "codeql":
+            continue
+        assert inventory.remediation({"aspect": aspect, "scope": "repository", "status": "fail"})
+
+
+def test_inventory_result_puts_remediations_on_failed_and_unknown_items(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    make_repo(tmp_path)
+
+    document = run(
+        inventory.main, [str(tmp_path), "--format", "result", "--language", "go"], capsys
+    )
+
+    items = {item["id"]: item for item in document["items"]}
+    assert "pip-audit" in items["dependency_audit/python"]["remediation"]
+    assert "references/python.md" in items["dependency_audit/python"]["remediation"]
+    assert "other-languages.md" in items["lint/go"]["remediation"]
+    assert "Advanced Security" in items["codeql/repository"]["remediation"]
+    assert "remediation" not in items["lint/python"]
+    assert validate(document) == []
+
+
+def test_inventory_has_no_remediation_for_passing_or_unlisted_aspects() -> None:
+    assert inventory.remediation({"aspect": "lint", "scope": "python", "status": "pass"}) is None
+    unlisted = {"aspect": "something_new", "scope": "repository", "status": "fail"}
+    assert inventory.remediation(unlisted) is None

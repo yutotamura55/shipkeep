@@ -1186,6 +1186,47 @@ SEVERITIES = {
     "readme": "low",
     "security_policy": "low",
 }
+# 共通の結果の形式で fail の項目に付ける直し方。SKILL.md の表の「How to fix」の列と同じ文
+# (太字の記号を除く)。tests/test_result_format.py で一致を確かめる。
+REMEDIATIONS = {
+    "history_coverage": (
+        "Run `git fetch --unshallow`, or fetch all branches, then scan again. "
+        "Until then, treat passing history checks as unconfirmed"
+    ),
+    "commit_identity": (
+        "Set the noreply address in Git, then rewrite the history with `git filter-repo --mailmap`"
+    ),
+    "history_secrets": (
+        "Revoke and replace the credential first: removing it from history does not make a "
+        "leaked key safe. Then remove it with `git filter-repo`"
+    ),
+    "history_personal_data": (
+        "Edit the files and rewrite the history, or accept it if the user decides the data "
+        "may be public"
+    ),
+    "denylist": "Same as personal data; rename the branch or tag",
+    "sensitive_files": "Remove them from the history, and replace any credential they held",
+    "env_files": "Add the ignore rule and an example file with empty values",
+    "license": "Choose a license with the user; without one, others may not reuse the code",
+    "readme": "Write what the project is and how to use it",
+    "github_settings": (
+        "Turn them on in the repository's Settings → Advanced Security (called Code security "
+        "in older GitHub pages)"
+    ),
+    "security_policy": (
+        "Write how to report a vulnerability, for example through GitHub's private reporting, "
+        "without a personal email address"
+    ),
+    "private_reporting": (
+        "Turn it on in Settings → Advanced Security right after making the repository public"
+    ),
+    "dependabot_alerts": "Turn them on in Settings → Advanced Security",
+    "workflow_token": (
+        'In Settings → Actions → General → Workflow permissions, choose "Read repository '
+        'contents and packages permissions" and clear "Allow GitHub Actions to create and '
+        'approve pull requests"'
+    ),
+}
 # パターンの一致で見つける検査は likely、ファイルや設定を読む検査は confirmed。
 PATTERN_CHECKS = {"history_secrets", "history_personal_data", "denylist"}
 EVIDENCE_KEYS = ("kind", "commit", "path", "line", "context")
@@ -1226,6 +1267,7 @@ def to_result(output: dict[str, Any], commit: str | None) -> dict[str, Any]:
         }
         if check["status"] == "fail":
             item["severity"] = SEVERITIES[check["id"]]
+            item["remediation"] = REMEDIATIONS[check["id"]]
         items.append(item)
     result: dict[str, Any] = {
         "format": RESULT_FORMAT,

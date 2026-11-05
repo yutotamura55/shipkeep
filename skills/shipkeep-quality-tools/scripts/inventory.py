@@ -478,6 +478,84 @@ SECURITY_ASPECTS = {
 }
 
 
+# 足りない観点の直し方に書く、参照の推奨の道具 (references/<言語>.md と common.md の表の写し)。
+# 表の先頭の道具とは限らないので、推奨を名指しで持つ。
+RECOMMENDED: dict[str, dict[str, str]] = {
+    "python": {
+        "format": "Ruff (`ruff format`)",
+        "lint": "Ruff (`ruff check`)",
+        "type_check": "mypy, with `strict = true` for a new project",
+        "security_lint": "Ruff's `S` rules, plus Semgrep or Opengrep",
+        "tests": "pytest",
+        "coverage": "pytest-cov, with the floor at the measured coverage",
+        "unused_code": "vulture, reviewing its findings",
+        "unused_dependencies": (
+            "a tool chosen after checking its current status (deptry is a candidate)"
+        ),
+        "dependency_audit": "pip-audit",
+    },
+    "javascript": {
+        "format": "Prettier",
+        "lint": "ESLint",
+        "type_check": "`tsc --noEmit` with `strict` in `tsconfig.json`",
+        "security_lint": "Semgrep or Opengrep",
+        "tests": "Vitest",
+        "coverage": (
+            "Vitest coverage (`@vitest/coverage-v8`), with the floor at the measured coverage"
+        ),
+        "unused_code": "Knip, reviewing its findings",
+        "unused_dependencies": "Knip",
+        "dependency_audit": "`npm audit` (or the package manager's equivalent)",
+    },
+}
+REPOSITORY_RECOMMENDED = {
+    "check_command": (
+        "one command that runs every check, such as `scripts/check.sh`, documented in the "
+        "README or AGENTS.md"
+    ),
+    "ci": "a CI workflow that runs the check command on every pull request",
+    "workflow_lint": "actionlint",
+    "workflow_security": "zizmor",
+    "sast": "Semgrep CE or Opengrep, fetching the rules at run time",
+    "dependency_audit": "OSV-Scanner, or the audit of each language",
+    "dependency_updates": "Dependabot (`.github/dependabot.yml`) or Renovate",
+    "dependency_review": (
+        "`actions/dependency-review-action`, after turning on the dependency graph"
+    ),
+    "diff_coverage": "diff-cover on the coverage report",
+}
+REFERENCE_FILES = {"python": "references/python.md", "javascript": "references/javascript.md"}
+
+
+def remediation(row: Row) -> str | None:
+    """観点の行の直し方を返す。fail と unknown 以外、または書くことがなければ None。"""
+    aspect, scope, status = row["aspect"], row["scope"], row["status"]
+    if status == "unknown" and aspect == "codeql":
+        return (
+            "Check whether CodeQL default setup is on in Settings → Advanced Security, and turn "
+            "it on where the repository can use code scanning"
+        )
+    if status == "unknown":
+        return (
+            "Research the tools for this language as references/other-languages.md of "
+            "shipkeep-quality-tools describes, and cite the sources"
+        )
+    if status != "fail":
+        return None
+    if scope == "repository":
+        tool = REPOSITORY_RECOMMENDED.get(aspect)
+        where = "references/common.md"
+    else:
+        tool = RECOMMENDED.get(scope, {}).get(aspect)
+        where = REFERENCE_FILES.get(scope, "references/common.md")
+    if tool is None:
+        return None
+    return (
+        f"Add {tool} (see {where} of shipkeep-quality-tools for the current version and "
+        "settings), run it from the check command, and run that command in CI"
+    )
+
+
 def to_result(output: dict[str, Any], commit: str | None) -> dict[str, Any]:
     """inventory() の出力を shared/result.schema.json の形式にする。"""
     items: list[dict[str, Any]] = []
@@ -522,6 +600,9 @@ def to_result(output: dict[str, Any], commit: str | None) -> dict[str, Any]:
             item["note"] = row["note"]
         if row["status"] == "fail":
             item["severity"] = "medium" if row["aspect"] in SECURITY_ASPECTS else "low"
+        fix = remediation(row)
+        if fix:
+            item["remediation"] = fix
         items.append(item)
     result: dict[str, Any] = {
         "format": RESULT_FORMAT,
