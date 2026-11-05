@@ -493,7 +493,8 @@ def test_recommendations_ignore_rows_that_are_not_aspects(
     (tmp_path / "x.md").write_text(
         "| Aspect | Recommended | Notes |\n| --- | --- | --- |\n"
         "| Lint | `tool-a` | x |\n| Packaging | tool-b | y |\n| Other | text |\n"
+        "| Format | tool-c \\| tool-d | z |\n"
     )
     monkeypatch.setattr(inventory, "REFERENCES", tmp_path)
 
-    assert inventory.recommendations("x.md") == {"lint": "tool-a"}
+    assert inventory.recommendations("x.md") == {"lint": "tool-a", "format": "tool-c | tool-d"}

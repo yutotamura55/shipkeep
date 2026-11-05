@@ -544,7 +544,11 @@ def recommendations(reference: str) -> dict[str, str]:
         return {}
     found: dict[str, str] = {}
     for line in text.splitlines():
-        cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
+        # Markdown の表では、セルの中の | を \| と書く。それでは区切らない。
+        cells = [
+            cell.strip().replace("\\|", "|")
+            for cell in re.split(r"(?<!\\)\|", line.strip().strip("|"))
+        ]
         if len(cells) < 2 or cells[0] in ("Aspect", "---") or not cells[0]:
             continue
         aspect = cells[0].lower().replace(" ", "_")
