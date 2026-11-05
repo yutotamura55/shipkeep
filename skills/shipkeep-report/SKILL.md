@@ -68,29 +68,37 @@ things: do them only after the user approves, and follow
    | --- | --- |
    | `dismissed` | Listed in `.shipkeep/dismissed.json` |
    | `already_open` | An open Issue for the same item exists |
-   | `closed_as_not_planned` | The user closed the Issue as not planned; suggest recording it with `dismiss` |
-   | `blocked_personal_data` | The item's text looks like personal data; mask it in the result and plan again |
+   | `closed_as_not_planned`, `closed_as_duplicate`, `closed_without_reason` | The Issue was closed for a reason other than completed; for not planned, suggest recording it with `dismiss` |
+   | `blocked_personal_data` | The item's text looks like personal data; the item is shown by its position (`result N item M`), not its id. Mask it in the result and plan again |
    | `over_limit` | More candidates than `--limit`; they are filed in a later run |
 
    An item whose earlier Issue was closed as completed but still fails is filed
-   again, with a link to the earlier Issue. Duplicates are found by a marker in
-   the Issue body, so removing the label does not cause a duplicate.
+   again, with a link to the earlier Issue. Duplicates are found by a marker on
+   the first line of the Issue body, counted only in Issues opened by the
+   repository's owner, members, or collaborators, so that a stranger cannot hide
+   an item by opening an Issue with a marker. Removing the label does not cause
+   a duplicate. The command ends with `plan sha256: <digest>` of the plan file.
 
 3. **Let the user approve.** Show the user the titles to create, the labels to
-   create, and the skipped items with their reasons. Do not paste the bodies'
-   values into the conversation; the bodies hold the masked evidence. The user
-   may ask for a lower limit or other options: plan again. Create nothing until
-   the user approves this plan.
+   create, the skipped items with their reasons, and the plan digest. Show a
+   body when the user asks: bodies hold only masked evidence. The user may ask
+   for a lower limit or other options: plan again. Create nothing until the
+   user approves this plan and its digest.
 
-4. **Create the Issues** of the approved plan:
+4. **Create the Issues** of the approved plan, passing the digest the user
+   approved:
 
    ```bash
-   python3 <this skill's directory>/scripts/report.py create /tmp/plan.json --repo OWNER/NAME
+   python3 <this skill's directory>/scripts/report.py create /tmp/plan.json --repo OWNER/NAME --sha256 <digest>
    ```
 
-   It creates the missing labels, then each Issue, after checking again that no
-   Issue for the same item appeared since the plan. Exit code 1 means some
-   creation failed; report which. Report the created Issue numbers.
+   It stops when the file no longer has that digest, or when an entry was not
+   made by `plan` (its marker, title, or a mention or cross-repository
+   reference outside code spans). It creates the missing labels, and stops
+   before any Issue if a label cannot be created. Then it creates each Issue,
+   after checking again that no Issue for the same item appeared since the
+   plan. Exit code 1 means some creation failed; report which entries. Report
+   the created Issue numbers.
 
 5. **Keep the record**, when the user wants it, on a dedicated branch of the
    target repository as `references/change-principles.md` says:
@@ -101,8 +109,9 @@ things: do them only after the user approves, and follow
      --tool TOOL --id ITEM_ID --reason "why it will not be fixed" [--issue N]
    ```
 
-   Record the results of each inspection. Dismiss an item only when the user
-   decided not to fix it, with their reason. Commit `.shipkeep/` and open a
+   Record the results of each inspection; recording the same result twice is
+   refused. Dismiss an item only when the user decided not to fix it, with
+   their reason. Commit `.shipkeep/` and open a
    pull request: a new dismissed entry hides a problem from later runs, so it
    is reviewed like a suppression comment.
 
@@ -113,9 +122,11 @@ things: do them only after the user approves, and follow
    python3 <this skill's directory>/scripts/report.py recurring <repository>/.shipkeep/history [--min-count 2]
    ```
 
-   For each, propose a check that a tool runs on every change (principle 12 of
-   `references/change-principles.md`): a linter rule, an ast-grep or Semgrep
-   rule, a CI check, or a repository setting. Let the user decide.
+   Each record counts once per item, and the same inspection recorded twice
+   counts once. For each listed item, propose a check that a tool runs on
+   every change (principle 12 of `references/change-principles.md`): a linter
+   rule, an ast-grep or Semgrep rule, a CI check, or a repository setting. Let
+   the user decide.
 
 ## The files in .shipkeep/
 
@@ -129,7 +140,11 @@ things: do them only after the user approves, and follow
 - Duplicates are found only through the marker that this script writes into
   Issue bodies; Issues written by hand about the same problem are not matched.
 - The personal-data check looks for email addresses and home directory paths
-  only. Masking secrets is the job of the tool that produced the result.
+  only, with the same allowances as shipkeep-publish-check (GitHub noreply
+  addresses, example domains, generic names such as `/home/runner`). Masking
+  secrets is the job of the tool that produced the result.
+- `validate` hides property names that are not simple identifiers in its
+  messages, because a key could hold a path or an address.
 - `create` posts with the identity of the signed-in `gh` user. For scheduled
   runs, run `create` in a separate step that has write access, after a person
   or a rule has accepted the plan.

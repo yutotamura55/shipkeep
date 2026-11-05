@@ -16,6 +16,7 @@ GitHub への書き込みは create だけが行い、案のファイルにな�
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -43,13 +44,47 @@ FULLWIDTH_AT = "\uff20"
 REPOSITORY = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 LABEL = re.compile(r"^[^,\r\n]{1,50}$")
 # Issue の本文に埋める目印。ID には空白や記号が入りうるので、パーセントエンコードする。
-MARKER = re.compile(r"<!-- shipkeep-item tool=(\S+) id=(\S+) -->")
+MARKER = re.compile(r"<!-- shipkeep-item tool=([A-Za-z0-9%._~-]+) id=([A-Za-z0-9%._~-]+) -->")
 
 # 個人情報に見える値。結果を作る shipkeep のスクリプトは値を伏せるが、ほかの道具から手で
 # 変換した結果には残りうる。Issue や記録に書く前に、ここでもう一度止める。
+# 判定は shipkeep-publish-check の scan.py に合わせる (skill は別々に導入されるので写して持つ)。
+# ただし、パスの途中に現れる /home/ (src/pages/home/ など) は数えず、git@ は clone の URL に
+# 使うホストに限る。
 EMAIL = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}")
-HOME_PATH = re.compile(r"(?:/home/|/Users/|[A-Za-z]:\\Users\\)[^/\\\s<>]+", re.IGNORECASE)
-PUBLIC_EMAIL_DOMAINS = {"example.com", "example.org", "example.net"}
+HOME_PATH = re.compile(
+    r"(?<![\w./\\-])(?:/home/|/Users/|[A-Za-z]:\\+Users\\+)([A-Za-z0-9._-]+|[^\x00-\x7f\s/\\]+)"
+)
+GENERIC_USER_NAMES = {"user", "username", "runner", "ubuntu", "app", "node", "vscode", "shared"}
+EXAMPLE_DOMAINS = {"example.com", "example.org", "example.net"}
+SERVICE_ADDRESSES = {"support@github.com", "noreply@github.com"}
+GIT_HOSTS = {"github.com", "gitlab.com", "bitbucket.org", "codeberg.org"}
+FILE_EXTENSIONS = {
+    "png",
+    "jpg",
+    "jpeg",
+    "gif",
+    "svg",
+    "webp",
+    "avif",
+    "ico",
+    "bmp",
+    "tif",
+    "tiff",
+    "pdf",
+    "css",
+    "js",
+    "mp4",
+    "webm",
+    "woff",
+    "woff2",
+    "ttf",
+    "otf",
+}
+# Issue の目印を数えるのは、リポジトリの関係者が作った Issue だけ。誰でも Issue を作れる
+# 公開リポジトリで、目印を書いた Issue によって項目を隠されないようにする。
+TRUSTED_AUTHORS = {"OWNER", "MEMBER", "COLLABORATOR"}
+SAFE_KEY = re.compile(r"^[A-Za-z0-9_-]{1,40}$")
 
 Key = tuple[str, str]
 GhRunner = Callable[[list[str], str | None], tuple[int, str]]
@@ -92,13 +127,38 @@ def run_gh(args: list[str], stdin: str | None = None) -> tuple[int, str]:
 # --- 読み込み -------------------------------------------------------------------------------
 
 
+def strings(value: Any) -> list[str]:
+    """JSON の値に含まれる文字列 (オブジェクトのキーを含む) をすべて返す。"""
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, list):
+        return [text for item in value for text in strings(item)]
+    if isinstance(value, dict):
+        return [text for key, item in value.items() for text in [str(key), *strings(item)]]
+    return []
+
+
 def read_json(path: Path, what: str) -> Any:
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
+        document = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, UnicodeDecodeError) as error:
         raise ReportError(f"cannot read the {what}") from error
     except json.JSONDecodeError as error:
         raise ReportError(f"the {what} is not JSON") from error
+    # JSON の \ud800 のような対になっていないサロゲートは読めるが、UTF-8 で書けない。
+    try:
+        for text in strings(document):
+            text.encode("utf-8")
+    except UnicodeEncodeError as error:
+        raise ReportError(f"the {what} holds text that is not valid Unicode") from error
+    return document
+
+
+def write_json(path: Path, document: Any, what: str) -> None:
+    try:
+        path.write_text(json.dumps(document, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    except (OSError, UnicodeError) as error:
+        raise ReportError(f"cannot write the {what}") from error
 
 
 def load_result(path: Path, position: int) -> dict[str, Any]:
@@ -108,6 +168,12 @@ def load_result(path: Path, position: int) -> dict[str, Any]:
         raise ReportError(
             f"result file {position} does not match the shipkeep result format; "
             "run the validate command for details"
+        )
+    metadata = {key: value for key, value in document.items() if key != "items"}
+    if any(looks_personal(text) for text in strings(metadata)):
+        raise ReportError(
+            f"result file {position} has text outside its items that looks like personal "
+            "data; mask it first"
         )
     return document
 
@@ -170,50 +236,70 @@ def existing_issues(gh: GhRunner, repository: str) -> dict[Key, list[dict[str, A
     for issue in issues:
         if not isinstance(issue, dict) or "pull_request" in issue:
             continue
-        for match in MARKER.finditer(issue.get("body") or ""):
-            key = (unquote(match.group(1)), unquote(match.group(2)))
-            found.setdefault(key, []).append(
-                {
-                    "number": issue.get("number"),
-                    "state": issue.get("state"),
-                    "state_reason": issue.get("state_reason"),
-                }
-            )
+        if issue.get("author_association") not in TRUSTED_AUTHORS:
+            continue
+        key = marker_key(issue.get("body") or "")
+        if key is None:
+            continue
+        found.setdefault(key, []).append(
+            {
+                "number": issue.get("number"),
+                "state": issue.get("state"),
+                "state_reason": issue.get("state_reason"),
+            }
+        )
     return found
+
+
+def marker_key(body: str) -> Key | None:
+    """本文の 1 行目の目印から (tool, id) を読む。
+
+    1 行目だけを見る。結果から写した文 (コードスパンの中) に目印を書かれても、別の項目の
+    Issue として数えないため。
+    """
+    first_line = body.split("\n", 1)[0].strip()
+    match = MARKER.fullmatch(first_line)
+    if match is None:
+        return None
+    return unquote(match.group(1)), unquote(match.group(2))
 
 
 def existing_labels(gh: GhRunner, repository: str) -> set[str]:
     labels = gh_list(gh, f"repos/{repository}/labels?per_page=100", "labels")
-    return {label["name"] for label in labels if isinstance(label, dict) and "name" in label}
+    # GitHub のラベルの名前は大文字小文字を区別しない。
+    return {
+        str(label["name"]).lower()
+        for label in labels
+        if isinstance(label, dict) and "name" in label
+    }
 
 
 # --- 個人情報の確認 ------------------------------------------------------------------------
 
 
+def is_public_address(address: str) -> bool:
+    lowered = address.lower()
+    local, _, domain = lowered.rpartition("@")
+    return (
+        lowered.endswith("@users.noreply.github.com")
+        or lowered in SERVICE_ADDRESSES
+        or "noreply" in local
+        or "no-reply" in local
+        or (local == "git" and domain in GIT_HOSTS)
+        or domain in EXAMPLE_DOMAINS
+        or domain.rsplit(".", 1)[-1] in FILE_EXTENSIONS
+    )
+
+
 def looks_personal(text: str) -> bool:
     """個人のメールアドレスやホームのパスに見える値を含むかを返す。値そのものは返さない。"""
-    if HOME_PATH.search(text):
+    if any(name.lower() not in GENERIC_USER_NAMES for name in HOME_PATH.findall(text)):
         return True
-    for address in EMAIL.findall(text):
-        local, _, domain = address.lower().rpartition("@")
-        public = (
-            domain.endswith("users.noreply.github.com")
-            or "noreply" in local
-            or "no-reply" in local
-            or local == "git"
-            or domain in PUBLIC_EMAIL_DOMAINS
-        )
-        if not public:
-            return True
-    return False
+    return any(not is_public_address(address) for address in EMAIL.findall(text))
 
 
 def item_texts(item: dict[str, Any]) -> list[str]:
-    texts = [str(item.get(key, "")) for key in ("id", "check", "scope", "summary", "note")]
-    texts.append(str(item.get("remediation", "")))
-    for evidence in item.get("evidence", []):
-        texts += [str(value) for value in evidence.values()]
-    return texts
+    return strings(item)
 
 
 # --- 本文の組み立て -------------------------------------------------------------------------
@@ -228,6 +314,18 @@ def code_span(text: str) -> str:
     fence = "`" * (longest + 1)
     pad = " " if text.startswith("`") or text.endswith("`") else ""
     return f"{fence}{pad}{text}{pad}{fence}"
+
+
+# 本文のうち、コードスパンの外に置いてよいのは決まった文だけ。メンション (@名前) や、ほかの
+# リポジトリの参照 (owner/repo#1) があれば、案が書き換えられたとみなす。
+CODE_SPAN = re.compile(r"(`+)(?!`).*?(?<!`)\1(?!`)")
+NOTIFYING = re.compile(r"@[A-Za-z0-9]|[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+#\d")
+
+
+def notifies(body: str) -> bool:
+    """コードスパンと 1 行目の目印を除いた本文に、通知を起こしうる書き方があるかを返す。"""
+    rest = body.split("\n", 1)[1] if "\n" in body else ""
+    return bool(NOTIFYING.search(CODE_SPAN.sub("", rest)))
 
 
 def marker(key: Key) -> str:
@@ -308,26 +406,30 @@ def body_for(key: Key, item: dict[str, Any], commit: str | None, previous: int |
 # --- plan -----------------------------------------------------------------------------------
 
 
+Candidate = tuple[Key, dict[str, Any], str | None, dict[str, int]]
+
+
 def candidates(
     results: list[dict[str, Any]], min_severity: str, include_unknown: bool
-) -> list[tuple[Key, dict[str, Any], str | None]]:
-    """Issue にする候補を、重大度の高い順に返す。"""
+) -> list[Candidate]:
+    """Issue にする候補を、重大度の高い順に返す。位置は (結果の番号, 項目の番号) で 1 始まり。"""
     threshold = SEVERITY_ORDER[min_severity]
-    found: list[tuple[Key, dict[str, Any], str | None]] = []
-    for result in results:
+    found: list[Candidate] = []
+    for result_number, result in enumerate(results, 1):
         tool = result["tool"]["name"]
         commit = result.get("target", {}).get("commit")
-        for item in result["items"]:
+        for item_number, item in enumerate(result["items"], 1):
             if item["status"] == "fail":
                 severity = item.get("severity", DEFAULT_SEVERITY)
                 if SEVERITY_ORDER[severity] < threshold:
                     continue
             elif not (item["status"] == "unknown" and include_unknown):
                 continue
-            found.append(((tool, item["id"]), item, commit))
+            where = {"result": result_number, "item": item_number}
+            found.append(((tool, item["id"]), item, commit, where))
 
-    def order(entry: tuple[Key, dict[str, Any], str | None]) -> tuple[int, int, str, str]:
-        (tool, item_id), item, _ = entry
+    def order(entry: Candidate) -> tuple[int, int, str, str]:
+        (tool, item_id), item, _, _ = entry
         # fail を重大度の高い順に並べ、確認できなかった項目 (unknown) はその後に置く。
         if item["status"] != "fail":
             return (1, 0, tool, item_id)
@@ -350,25 +452,35 @@ def make_plan(
     create: list[dict[str, Any]] = []
     skipped: list[dict[str, Any]] = []
     seen: set[Key] = set()
-    for key, item, commit in candidates(results, min_severity, include_unknown):
+    for key, item, commit, where in candidates(results, min_severity, include_unknown):
+        if any(looks_personal(text) for text in item_texts(item)):
+            # 個人情報に見える値は ID に入っていることもあるので、ID を出さず位置で示す。
+            skipped.append({**where, "reason": "blocked_personal_data"})
+            continue
         if key in seen:
             continue
         seen.add(key)
         entry: dict[str, Any] = {"tool": key[0], "id": key[1]}
         filed = issues.get(key, [])
         open_issue = next((i for i in filed if i["state"] == "open"), None)
-        not_planned = next((i for i in filed if i["state_reason"] == "not_planned"), None)
+        # completed 以外の理由 (not planned、duplicate、理由なし) で閉じた Issue があれば作らない。
+        closed = next(
+            (i for i in filed if i["state"] == "closed" and i["state_reason"] != "completed"), None
+        )
         completed = next((i for i in filed if i["state_reason"] == "completed"), None)
         if key in dismissed:
             skipped.append({**entry, "reason": "dismissed"})
         elif open_issue is not None:
             skipped.append({**entry, "reason": "already_open", "issue": open_issue["number"]})
-        elif not_planned is not None:
+        elif closed is not None:
+            reason = closed["state_reason"]
             skipped.append(
-                {**entry, "reason": "closed_as_not_planned", "issue": not_planned["number"]}
+                {
+                    **entry,
+                    "reason": f"closed_as_{reason}" if reason else "closed_without_reason",
+                    "issue": closed["number"],
+                }
             )
-        elif any(looks_personal(text) for text in item_texts(item)):
-            skipped.append({**entry, "reason": "blocked_personal_data"})
         elif len(create) >= limit:
             skipped.append({**entry, "reason": "over_limit"})
         else:
@@ -385,7 +497,7 @@ def make_plan(
         "format": PLAN_FORMAT,
         "repository": repository,
         "created_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-        "labels_to_create": [label for label in labels if label not in labels_present],
+        "labels_to_create": [label for label in labels if label.lower() not in labels_present],
         "create": create,
         "skipped": skipped,
     }
@@ -399,7 +511,11 @@ def print_plan(plan: dict[str, Any]) -> None:
         print(f"  label to create: {label}")
     for entry in plan["skipped"]:
         issue = f" (#{entry['issue']})" if "issue" in entry else ""
-        print(f"  skip: {entry['tool']} {entry['id']}: {entry['reason']}{issue}")
+        if "tool" in entry:
+            name = f"{entry['tool']} {entry['id']}"
+        else:
+            name = f"result {entry['result']} item {entry['item']}"
+        print(f"  skip: {name}: {entry['reason']}{issue}")
 
 
 # --- create ---------------------------------------------------------------------------------
@@ -424,7 +540,25 @@ def load_plan(path: Path) -> dict[str, Any]:
     )
     if not valid:
         raise ReportError(f"the plan file is not in the {PLAN_FORMAT} format")
+    keys = [(entry["tool"], entry["id"]) for entry in plan["create"]]
+    if len(set(keys)) != len(keys):
+        raise ReportError("the plan file lists the same item twice")
+    for number, (entry, key) in enumerate(zip(plan["create"], keys, strict=True), 1):
+        # 案のファイルが書き換えられていないかを、作り方の決まりで確かめる。
+        if (
+            marker_key(entry["body"]) != key
+            or entry["title"] != title_for(key[0], {"id": key[1]})
+            or notifies(entry["body"])
+        ):
+            raise ReportError(f"entry {number} of the plan file was not made by the plan command")
     return dict(plan)
+
+
+def file_digest(path: Path) -> str:
+    try:
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+    except OSError as error:
+        raise ReportError("cannot read the plan file") from error
 
 
 def create_issues(plan: dict[str, Any], repository: str, gh: GhRunner) -> int:
@@ -433,28 +567,31 @@ def create_issues(plan: dict[str, Any], repository: str, gh: GhRunner) -> int:
         raise ReportError("the plan was made for another repository")
     issues = existing_issues(gh, repository)
     present = existing_labels(gh, repository)
-    failures = 0
     for label in plan["labels_to_create"]:
-        if label in present:
+        if label.lower() in present:
             continue
         status, _ = gh(
             ["api", "-X", "POST", f"repos/{repository}/labels", "--input", "-"],
             json.dumps({"name": label, "color": "ededed", "description": "Filed by shipkeep"}),
         )
         if status != 0:
-            print(f"failed to create the label {label}", file=sys.stderr)
-            failures += 1
-    for entry in plan["create"]:
+            # ラベルがないまま Issue を作ると、GitHub が別の色で作るか失敗する。ここで止める。
+            print(f"failed to create the label {label}; no Issue was created", file=sys.stderr)
+            return 1
+        present.add(label.lower())
+    failures = 0
+    for number, entry in enumerate(plan["create"], 1):
         key = (entry["tool"], entry["id"])
         filed = issues.get(key, [])
         blocking = next(
-            (i for i in filed if i["state"] == "open" or i["state_reason"] == "not_planned"), None
+            (i for i in filed if i["state"] == "open" or i["state_reason"] != "completed"),
+            None,
         )
         if blocking is not None:
-            print(f"skipped {entry['tool']} {entry['id']}: already filed as #{blocking['number']}")
+            print(f"skipped entry {number}: already filed as #{blocking['number']}")
             continue
         if looks_personal(entry["title"]) or looks_personal(entry["body"]):
-            print(f"skipped {entry['tool']} {entry['id']}: the text looks like personal data")
+            print(f"skipped entry {number}: the text looks like personal data")
             failures += 1
             continue
         payload = {"title": entry["title"], "body": entry["body"], "labels": entry["labels"]}
@@ -462,17 +599,20 @@ def create_issues(plan: dict[str, Any], repository: str, gh: GhRunner) -> int:
             ["api", "-X", "POST", f"repos/{repository}/issues", "--input", "-"],
             json.dumps(payload),
         )
-        number = None
+        created = None
         if status == 0:
             try:
-                number = json.loads(out).get("number")
+                created = json.loads(out).get("number")
             except (json.JSONDecodeError, AttributeError):
-                number = None
-        if number is None:
-            print(f"failed to create the Issue for {entry['tool']} {entry['id']}", file=sys.stderr)
+                created = None
+        if created is None:
+            print(f"failed to create the Issue of entry {number}", file=sys.stderr)
             failures += 1
             continue
-        print(f"created #{number}: {entry['title']}")
+        issues.setdefault(key, []).append(
+            {"number": created, "state": "open", "state_reason": None}
+        )
+        print(f"created #{created}: {entry['title']}")
     return failures
 
 
@@ -484,25 +624,32 @@ def safe_name(text: str) -> str:
 
 
 def record(result_path: Path, history: Path) -> str:
-    """結果を history に写し、書いたファイルの名前を返す。"""
+    """結果を history に写し、書いたファイルの名前を返す。同じ結果が記録済みなら書かない。"""
     document = load_result(result_path, 1)
-    if any(looks_personal(text) for item in document["items"] for text in item_texts(item)):
+    if any(looks_personal(text) for text in strings(document)):
         raise ReportError("the result contains text that looks like personal data; mask it first")
     day = str(document.get("generated_at", ""))[:10] or date.today().isoformat()
     name = f"{safe_name(day)}-{safe_name(document['tool']['name'])}"
     commit = document.get("target", {}).get("commit")
     if commit:
         name += f"-{commit[:7]}"
+    if history.is_dir():
+        for existing in history.glob("*.json"):
+            try:
+                if json.loads(existing.read_text(encoding="utf-8")) == document:
+                    raise ReportError("this result is already recorded")
+            except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+                continue
     try:
         history.mkdir(parents=True, exist_ok=True)
-        candidate = history / f"{name}.json"
-        number = 2
-        while candidate.exists():
-            candidate = history / f"{name}-{number}.json"
-            number += 1
-        candidate.write_text(json.dumps(document, ensure_ascii=False, indent=2) + "\n")
     except OSError as error:
         raise ReportError("cannot write to the history directory") from error
+    candidate = history / f"{name}.json"
+    number = 2
+    while candidate.exists():
+        candidate = history / f"{name}-{number}.json"
+        number += 1
+    write_json(candidate, document, "history file")
     return candidate.name
 
 
@@ -527,15 +674,17 @@ def dismiss(path: Path, tool: str, item_id: str, reason: str, issue: int | None)
     document = {"format": DISMISSED_FORMAT, "items": items}
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(document, ensure_ascii=False, indent=2) + "\n")
     except OSError as error:
         raise ReportError("cannot write the dismissed file") from error
+    write_json(path, document, "dismissed file")
 
 
 def recurring(history: Path, minimum: int) -> dict[str, Any]:
     """記録のうち、minimum 回以上 fail だった項目を、回数の多い順に返す。"""
     counts: dict[Key, dict[str, Any]] = {}
     skipped = 0
+    duplicates = 0
+    runs: set[tuple[str, str, str]] = set()
     files = sorted(history.glob("*.json")) if history.is_dir() else []
     for path in files:
         try:
@@ -544,12 +693,16 @@ def recurring(history: Path, minimum: int) -> dict[str, Any]:
             skipped += 1
             continue
         tool = document["tool"]["name"]
-        for item in document["items"]:
-            if item["status"] != "fail":
-                continue
+        # 同じ点検を 2 回記録しても、1 回と数える。
+        run = (tool, document.get("target", {}).get("commit", ""), document.get("generated_at", ""))
+        if run in runs:
+            duplicates += 1
+            continue
+        runs.add(run)
+        failed = {item["id"]: item for item in document["items"] if item["status"] == "fail"}
+        for item_id, item in failed.items():
             entry = counts.setdefault(
-                (tool, item["id"]),
-                {"tool": tool, "id": item["id"], "check": item["check"], "count": 0},
+                (tool, item_id), {"tool": tool, "id": item_id, "check": item["check"], "count": 0}
             )
             entry["count"] += 1
             entry["last"] = path.name
@@ -557,7 +710,12 @@ def recurring(history: Path, minimum: int) -> dict[str, Any]:
         (e for e in counts.values() if e["count"] >= minimum),
         key=lambda e: (-e["count"], e["tool"], e["id"]),
     )
-    return {"records": len(files), "unreadable": skipped, "recurring": found}
+    return {
+        "records": len(files),
+        "unreadable": skipped,
+        "duplicates": duplicates,
+        "recurring": found,
+    }
 
 
 # --- コマンドライン -------------------------------------------------------------------------
@@ -576,6 +734,12 @@ class QuietArgumentParser(argparse.ArgumentParser):
 def repository_arg(value: str) -> str:
     if not REPOSITORY.match(value):
         raise argparse.ArgumentTypeError("use owner/name")
+    return value
+
+
+def digest_arg(value: str) -> str:
+    if not re.fullmatch(r"[0-9a-f]{64}", value):
+        raise argparse.ArgumentTypeError("a SHA-256 digest in hex")
     return value
 
 
@@ -619,6 +783,12 @@ def build_parser() -> QuietArgumentParser:
     create = commands.add_parser("create", help="create the labels and Issues of a plan")
     create.add_argument("plan", type=Path)
     create.add_argument("--repo", required=True, type=repository_arg, help="owner/name")
+    create.add_argument(
+        "--sha256",
+        required=True,
+        type=digest_arg,
+        help="the plan digest that plan printed and the user approved",
+    )
 
     record_parser = commands.add_parser("record", help="copy a result into .shipkeep/history/")
     record_parser.add_argument("result", type=Path)
@@ -666,13 +836,13 @@ def main(argv: list[str] | None = None, gh: GhRunner = run_gh) -> int:
                 args.min_severity,
                 args.include_unknown,
             )
-            try:
-                args.output.write_text(json.dumps(plan, ensure_ascii=False, indent=2) + "\n")
-            except OSError as error:
-                raise ReportError("cannot write the plan file") from error
+            write_json(args.output, plan, "plan file")
             print_plan(plan)
+            print(f"plan sha256: {file_digest(args.output)}")
             return 0
         if args.command == "create":
+            if file_digest(args.plan) != args.sha256:
+                raise ReportError("the plan file changed after it was approved; plan again")
             return 1 if create_issues(load_plan(args.plan), args.repo, gh) else 0
         if args.command == "record":
             print(f"recorded {record(args.result, args.into)}")

@@ -332,3 +332,13 @@ def test_the_validator_rejects_refs_it_cannot_follow() -> None:
     # 事前の走査は $defs の中身を確かめるので、配列を指す参照は required などで作る。
     with pytest.raises(ValueError, match="does not point"):
         validate(1, {"required": ["a"], "$ref": "#/required"})
+
+
+def test_the_end_anchor_does_not_accept_a_trailing_newline() -> None:
+    schema = {"type": "string", "pattern": "^[a-z]+$"}
+    assert validate("readme", schema) == []
+    assert validate("readme\n", schema) == ["$: does not match ^[a-z]+$"]
+
+
+def test_patterns_without_an_end_anchor_match_anywhere() -> None:
+    assert validate("a readme\n", {"type": "string", "pattern": "readme"}) == []

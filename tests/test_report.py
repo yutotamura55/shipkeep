@@ -52,7 +52,9 @@ class FakeGh:
         if "list" in self.fail:
             return 1, ""
         if "/issues?" in path:
-            data: list[dict[str, Any]] = [{"state_reason": None, **i} for i in self.issues]
+            data: list[dict[str, Any]] = [
+                {"state_reason": None, "author_association": "OWNER", **i} for i in self.issues
+            ]
         else:
             data = [{"name": name} for name in self.labels]
         if self.pages and len(data) > 1:
@@ -89,12 +91,13 @@ def write_result(
     items: list[dict[str, Any]],
     name: str = "result.json",
     tool: str = "shipkeep-publish-check",
+    generated_at: str = "2026-11-05T01:02:03+00:00",
 ) -> Path:
     document = {
         "format": "shipkeep-result/1",
         "tool": {"name": tool},
         "target": {"commit": "a" * 40},
-        "generated_at": "2026-11-05T01:02:03+00:00",
+        "generated_at": generated_at,
         "items": items,
     }
     assert validate(document) == []
@@ -115,6 +118,13 @@ def plan(
 
 def marker_body(tool: str, item_id: str) -> str:
     return report.marker((tool, item_id)) + "\nold body"
+
+
+def create(tmp_path: Path, gh: Any, repo: str = REPO, digest: str | None = None) -> int:
+    path = tmp_path / "plan.json"
+    return report.main(
+        ["create", str(path), "--repo", repo, "--sha256", digest or report.file_digest(path)], gh
+    )
 
 
 # --- validate ---------------------------------------------------------------------------------
@@ -391,7 +401,7 @@ def test_create_makes_labels_and_issues_of_the_plan(
     gh = FakeGh()
     plan(tmp_path, [result], gh)
 
-    assert report.main(["create", str(tmp_path / "plan.json"), "--repo", REPO], gh) == 0
+    assert create(tmp_path, gh) == 0
 
     assert sorted(gh.labels) == ["needs-triage", "shipkeep"]
     assert [p["title"] for p in gh.created()] == [
@@ -402,7 +412,7 @@ def test_create_makes_labels_and_issues_of_the_plan(
     assert "created #101" in out and "created #102" in out
 
     # 同じ案をもう一度作っても、重複しない。
-    assert report.main(["create", str(tmp_path / "plan.json"), "--repo", REPO], gh) == 0
+    assert create(tmp_path, gh) == 0
     assert len(gh.created()) == 2
     assert "already filed as #101" in capsys.readouterr().out
 
@@ -413,9 +423,7 @@ def test_create_refuses_a_plan_for_another_repository(
     result = write_result(tmp_path, [item("license")])
     plan(tmp_path, [result], FakeGh())
 
-    assert (
-        report.main(["create", str(tmp_path / "plan.json"), "--repo", "other/repo"], FakeGh()) == 2
-    )
+    assert create(tmp_path, FakeGh(), repo="other/repo") == 2
     assert "another repository" in capsys.readouterr().err
 
 
@@ -423,11 +431,17 @@ def test_create_reports_failures(tmp_path: Path, capsys: pytest.CaptureFixture[s
     result = write_result(tmp_path, [item("license")])
     plan(tmp_path, [result], FakeGh())
 
+    # ラベルを作れなければ、Issue は 1 件も作らない。
     gh = FakeGh(fail={"create_issue", "create_label"})
-    assert report.main(["create", str(tmp_path / "plan.json"), "--repo", REPO], gh) == 1
-    err = capsys.readouterr().err
-    assert "failed to create the label" in err
-    assert "failed to create the Issue for shipkeep-publish-check license" in err
+    assert create(tmp_path, gh) == 1
+    assert "failed to create the label shipkeep; no Issue was created" in capsys.readouterr().err
+    assert gh.created() == []
+
+    gh = FakeGh(labels=["Shipkeep", "NEEDS-TRIAGE"], fail={"create_issue"})
+    assert create(tmp_path, gh) == 1
+    assert "failed to create the Issue of entry 1" in capsys.readouterr().err
+    # ラベルは大文字小文字を区別せずに比べ、作り直さない。
+    assert gh.labels == ["Shipkeep", "NEEDS-TRIAGE"]
 
 
 def test_create_refuses_a_plan_edited_to_hold_personal_data(
@@ -437,13 +451,19 @@ def test_create_refuses_a_plan_edited_to_hold_personal_data(
     plan(tmp_path, [result], FakeGh())
     path = tmp_path / "plan.json"
     document = json.loads(path.read_text())
-    document["create"][0]["body"] += f"\ncontact {PERSONAL_EMAIL}\n"
+    document["create"][0]["body"] += f"\ncontact `{PERSONAL_EMAIL}`\n"
     path.write_text(json.dumps(document))
     gh = FakeGh(labels=["shipkeep", "needs-triage"])
 
-    assert report.main(["create", str(path), "--repo", REPO], gh) == 1
+    # 承認の後にファイルが変わったので、承認したハッシュと合わない。
+    assert create(tmp_path, gh, digest="0" * 64) == 2
+    assert "changed after it was approved" in capsys.readouterr().err
+    # 新しいハッシュで渡しても、個人情報に見える値があれば作らない。
+    assert create(tmp_path, gh) == 1
     assert gh.created() == []
-    assert "looks like personal data" in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert "skipped entry 1: the text looks like personal data" in out
+    assert PERSONAL_EMAIL not in out
 
 
 @pytest.mark.parametrize(
@@ -461,7 +481,7 @@ def test_create_rejects_a_malformed_plan(tmp_path: Path, change: dict[str, Any])
     document = {**json.loads(path.read_text()), **change}
     path.write_text(json.dumps(document))
 
-    assert report.main(["create", str(path), "--repo", REPO], FakeGh()) == 2
+    assert create(tmp_path, FakeGh()) == 2
 
 
 # --- record / dismiss / recurring ------------------------------------------------------------
@@ -473,15 +493,23 @@ def test_record_writes_a_dated_file_without_overwriting(
     result = write_result(tmp_path, [item("license")])
     history = tmp_path / ".shipkeep" / "history"
 
+    later = write_result(
+        tmp_path, [item("license")], name="later.json", generated_at="2026-11-05T09:00:00Z"
+    )
+
     assert report.main(["record", str(result), "--into", str(history)]) == 0
-    assert report.main(["record", str(result), "--into", str(history)]) == 0
+    assert report.main(["record", str(later), "--into", str(history)]) == 0
+    # 同じ結果は 2 回記録しない。
+    assert report.main(["record", str(result), "--into", str(history)]) == 2
 
     names = sorted(p.name for p in history.iterdir())
     assert names == [
         "2026-11-05-shipkeep-publish-check-aaaaaaa-2.json",
         "2026-11-05-shipkeep-publish-check-aaaaaaa.json",
     ]
-    assert str(tmp_path) not in capsys.readouterr().out
+    captured = capsys.readouterr()
+    assert "already recorded" in captured.err
+    assert str(tmp_path) not in captured.out + captured.err
 
 
 def test_record_refuses_personal_data(tmp_path: Path) -> None:
@@ -531,26 +559,31 @@ def test_recurring_counts_failures_across_records(
     history.mkdir()
     for number, items in enumerate(
         [
-            [item("license"), item("readme")],
+            # 1 つの記録に同じ ID が 2 回あっても、1 回と数える。
+            [item("license"), item("readme"), item("readme")],
             [item("license"), item("readme", status="pass")],
             [item("license")],
         ]
     ):
-        (history / f"r{number}.json").write_text(write_result(tmp_path, items).read_text())
+        text = write_result(tmp_path, items, generated_at=f"2026-11-0{number + 1}T00:00:00Z")
+        (history / f"r{number}.json").write_text(text.read_text())
+    # 同じ点検を 2 回記録したものは数えない。
+    (history / "r2-copy.json").write_text((history / "r2.json").read_text())
     (history / "broken.json").write_text("{}")
 
     assert report.main(["recurring", str(history)]) == 0
 
     document = json.loads(capsys.readouterr().out)
-    assert document["records"] == 4
+    assert document["records"] == 5
     assert document["unreadable"] == 1
+    assert document["duplicates"] == 1
     assert document["recurring"] == [
         {
             "tool": "shipkeep-publish-check",
             "id": "license",
             "check": "license",
             "count": 3,
-            "last": "r2.json",
+            "last": "r2-copy.json",
         }
     ]
     assert report.main(["recurring", str(history), "--min-count", "0"]) == 2
@@ -659,7 +692,7 @@ def test_create_reports_a_response_without_a_number(
             return 0, "not json"
         return gh(args, stdin)
 
-    assert report.main(["create", str(tmp_path / "plan.json"), "--repo", REPO], odd) == 1
+    assert create(tmp_path, odd) == 1
     assert "failed to create the Issue" in capsys.readouterr().err
 
 
@@ -691,3 +724,210 @@ def test_a_bad_label_is_rejected(tmp_path: Path) -> None:
             ["plan", str(result), "--repo", REPO, "--output", "x", "--label", "a,b"], FakeGh()
         )
     assert exit_info.value.code == 2
+
+
+# --- レビューで見つかった攻撃と誤検出の例 -----------------------------------------------------
+
+
+def test_a_marker_inside_the_summary_does_not_hide_another_item(tmp_path: Path) -> None:
+    tool = "shipkeep-publish-check"
+    fake = report.marker((tool, "history_secrets"))
+    result = write_result(
+        tmp_path, [item("readme", summary=f"see {fake}"), item("history_secrets")]
+    )
+    gh = FakeGh()
+    plan(tmp_path, [result], gh)
+    assert create(tmp_path, gh) == 0
+
+    _, document = plan(tmp_path, [result], gh)
+
+    # 1 回目に作った Issue の本文には偽の目印が入るが、1 行目でないので数えない。
+    assert {e["id"]: e["reason"] for e in document["skipped"]} == {
+        "history_secrets": "already_open",
+        "readme": "already_open",
+    }
+    assert report.marker_key("x\n" + fake) is None
+
+
+def test_markers_in_issues_from_outsiders_are_ignored(tmp_path: Path) -> None:
+    tool = "shipkeep-publish-check"
+    result = write_result(tmp_path, [item("license")])
+    gh = FakeGh(
+        issues=[
+            {
+                "number": 3,
+                "state": "open",
+                "author_association": "NONE",
+                "body": marker_body(tool, "license"),
+            }
+        ]
+    )
+
+    _, document = plan(tmp_path, [result], gh)
+
+    assert [e["id"] for e in document["create"]] == ["license"]
+
+
+@pytest.mark.parametrize(
+    ("state_reason", "reason"),
+    [
+        ("duplicate", "closed_as_duplicate"),
+        (None, "closed_without_reason"),
+    ],
+)
+def test_closed_issues_other_than_completed_are_not_filed_again(
+    tmp_path: Path, state_reason: str | None, reason: str
+) -> None:
+    tool = "shipkeep-publish-check"
+    result = write_result(tmp_path, [item("license")])
+    gh = FakeGh(
+        issues=[
+            {
+                "number": 4,
+                "state": "closed",
+                "state_reason": state_reason,
+                "body": marker_body(tool, "license"),
+            }
+        ]
+    )
+
+    _, document = plan(tmp_path, [result], gh)
+
+    assert document["skipped"] == [{"tool": tool, "id": "license", "reason": reason, "issue": 4}]
+
+
+def test_blocked_items_are_shown_by_position_not_by_id(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    result = write_result(tmp_path, [item("readme"), item("author/" + PERSONAL_EMAIL)])
+
+    _, document = plan(tmp_path, [result], FakeGh())
+
+    assert {"result": 1, "item": 2, "reason": "blocked_personal_data"} in document["skipped"]
+    assert PERSONAL_EMAIL not in json.dumps(document)
+    assert PERSONAL_EMAIL not in capsys.readouterr().out
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        lambda d: d["create"].append(dict(d["create"][0])),
+        lambda d: d["create"][0].update(body=d["create"][0]["body"] + "\nping @someone\n"),
+        lambda d: d["create"][0].update(body=d["create"][0]["body"] + "\nsee other/repo#1\n"),
+        lambda d: d["create"][0].update(title="[shipkeep] something else"),
+        lambda d: d["create"][0].update(body="no marker\n"),
+    ],
+)
+def test_create_rejects_plans_not_made_by_the_plan_command(
+    tmp_path: Path, change: Any, capsys: pytest.CaptureFixture[str]
+) -> None:
+    result = write_result(tmp_path, [item("license")])
+    plan(tmp_path, [result], FakeGh())
+    path = tmp_path / "plan.json"
+    document = json.loads(path.read_text())
+    change(document)
+    path.write_text(json.dumps(document))
+    gh = FakeGh(labels=["shipkeep", "needs-triage"])
+
+    assert create(tmp_path, gh) == 2
+    assert gh.created() == []
+    assert "plan file" in capsys.readouterr().err
+
+
+def test_mentions_inside_code_spans_are_allowed() -> None:
+    assert not report.notifies("marker\n`@someone` and ``other/repo#1``\n")
+    assert report.notifies("marker\nhello @someone\n")
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "src/pages/home/index.tsx",
+        "app/models/users/profile.rb",
+        "public/icon@2x.png",
+        "/home/runner/work/repo",
+        "git@github.com:owner/repo.git",
+        "1+me@users.noreply.github.com",
+    ],
+)
+def test_ordinary_repository_text_is_not_personal(text: str) -> None:
+    assert not report.looks_personal(text)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "/home/" + "alice/project",
+        "path=/Users/" + "alice/x",
+        "C:\\Users\\" + "alice\\x",
+        "git" + "@" + "corp.example.jp",
+        "a" + "@" + "fakeusers.noreply.github.com.evil.jp",
+    ],
+)
+def test_personal_looking_text_is_caught(text: str) -> None:
+    assert report.looks_personal(text)
+
+
+def test_result_metadata_with_personal_data_is_rejected(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    path = write_result(tmp_path, [item("license")])
+    document = json.loads(path.read_text())
+    document["tool"]["version"] = "/home/" + "alice/build"
+    path.write_text(json.dumps(document))
+
+    assert report.main(["record", str(path), "--into", str(tmp_path / "h")]) == 2
+    assert "outside its items" in capsys.readouterr().err
+
+
+def test_invalid_unicode_is_reported_without_a_traceback(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    path = tmp_path / "r.json"
+    path.write_text(
+        '{"format": "shipkeep-result/1", "tool": {"name": "x"}, "items": ['
+        '{"id": "a", "check": "a", "status": "fail", "summary": "\\ud800"}]}'
+    )
+
+    assert report.main(["record", str(path), "--into", str(tmp_path / "h")]) == 2
+    assert "not valid Unicode" in capsys.readouterr().err
+
+
+def test_validate_hides_unexpected_property_names(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    path = write_result(tmp_path, [item("license")])
+    document = json.loads(path.read_text())
+    secret_key = "/home/" + "alice/key"
+    document["items"][0][secret_key] = 1
+    document["counts"] = {secret_key: -1}
+    path.write_text(json.dumps(document))
+
+    assert report.main(["validate", str(path)]) == 1
+
+    out = capsys.readouterr().out
+    assert "unexpected property <property>" in out
+    assert "$.counts.<property>: below 0" in out
+    assert "alice" not in out
+
+
+def test_create_reports_a_missing_plan_and_a_bad_digest(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    missing = tmp_path / "missing.json"
+    args = ["create", str(missing), "--repo", REPO, "--sha256", "0" * 64]
+    assert report.main(args, FakeGh()) == 2
+    assert "cannot read the plan file" in capsys.readouterr().err
+
+    with pytest.raises(SystemExit) as exit_info:
+        report.main(["create", str(missing), "--repo", REPO, "--sha256", "xyz"], FakeGh())
+    assert exit_info.value.code == 2
+
+
+def test_record_ignores_unreadable_files_in_the_history(tmp_path: Path) -> None:
+    history = tmp_path / "history"
+    history.mkdir()
+    (history / "broken.json").write_text("not json")
+    result = write_result(tmp_path, [item("license")])
+
+    assert report.record(result, history).endswith("-aaaaaaa.json")
