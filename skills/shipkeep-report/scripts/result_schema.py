@@ -1,6 +1,8 @@
-"""shared/result.schema.json に対する、テスト用の小さな検証。
+"""shipkeep の結果の形式 (references/result.schema.json) に対する、小さな検証。
 
-jsonschema ライブラリに頼らず、スキーマが使う語だけを実装する: type、required、properties、
+report.py とテストが使う。原本のスキーマは shared/result.schema.json で、この skill の
+references/ に同じ内容の写しを置く。jsonschema ライブラリに頼らず (skill のスクリプトは
+標準ライブラリだけを使う)、スキーマが使う語だけを実装する: type、required、properties、
 additionalProperties、items、enum、const、pattern、minimum、minLength、$ref (#/$defs/...)、
 format (date-time だけ)、allOf、if/then/else、not。検証の前にスキーマ全体を走査し、対応しない語や
 format があれば ValueError にして、黙って通さない。
@@ -11,10 +13,11 @@ from __future__ import annotations
 import json
 import re
 from datetime import datetime
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
-SCHEMA_PATH = Path(__file__).resolve().parents[1] / "shared" / "result.schema.json"
+SCHEMA_PATH = Path(__file__).resolve().parents[1] / "references" / "result.schema.json"
 TYPES = {
     "object": dict,
     "array": list,
@@ -51,9 +54,33 @@ DATE_TIME = re.compile(
 )
 
 
+# エラーの文に入れてよいプロパティの名前。入力のキーは何でもありうる (パスやアドレスなど) ので、
+# この形でないものは名前を伏せる。
+SAFE_NAME = re.compile(r"^[A-Za-z0-9_-]{1,40}$")
+
+
+@lru_cache(maxsize=1)
+def _cached_schema() -> str:
+    return SCHEMA_PATH.read_text(encoding="utf-8")
+
+
 def load_schema() -> dict[str, Any]:
-    schema: dict[str, Any] = json.loads(SCHEMA_PATH.read_text(encoding="utf-8"))
+    schema: dict[str, Any] = json.loads(_cached_schema())
     return schema
+
+
+def _name(key: str) -> str:
+    return key if SAFE_NAME.match(key) else "<property>"
+
+
+def _search(pattern: str, value: str) -> bool:
+    """JSON Schema (ECMA-262) の pattern として調べる。末尾の $ は文字列の終わりだけに一致させる。
+
+    Python の $ は末尾の改行の直前にも一致するため、\\Z に置き換える。
+    """
+    if pattern.endswith("$") and not pattern.endswith("\\$"):
+        pattern = pattern[:-1] + r"\Z"
+    return re.search(pattern, value) is not None
 
 
 def check_supported(schema: dict[str, Any], where: str = "#") -> None:
@@ -88,7 +115,8 @@ def _resolve(ref: str, root: dict[str, Any]) -> dict[str, Any]:
     node: Any = root
     for part in ref[2:].split("/"):
         node = node[part]
-    assert isinstance(node, dict)
+    if not isinstance(node, dict):
+        raise ValueError(f"$ref does not point to a schema: {ref}")
     return node
 
 
@@ -123,7 +151,7 @@ def _check(
             errors.append(f"{where}: must be {schema['type']}")
             return
     if isinstance(value, str):
-        if "pattern" in schema and not re.search(schema["pattern"], value):
+        if "pattern" in schema and not _search(schema["pattern"], value):
             errors.append(f"{where}: does not match {schema['pattern']}")
         if "minLength" in schema and len(value) < schema["minLength"]:
             errors.append(f"{where}: shorter than {schema['minLength']}")
@@ -141,9 +169,9 @@ def _check(
             if key in properties:
                 _check(item, properties[key], root, f"{where}.{key}", errors)
             elif isinstance(schema.get("additionalProperties"), dict):
-                _check(item, schema["additionalProperties"], root, f"{where}.{key}", errors)
+                _check(item, schema["additionalProperties"], root, f"{where}.{_name(key)}", errors)
             elif schema.get("additionalProperties") is False:
-                errors.append(f"{where}: unexpected property {key}")
+                errors.append(f"{where}: unexpected property {_name(key)}")
     if isinstance(value, list) and "items" in schema:
         for index, item in enumerate(value):
             _check(item, schema["items"], root, f"{where}[{index}]", errors)

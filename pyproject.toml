@@ -18,7 +18,7 @@ select = ["E", "F", "W", "I", "B", "UP", "SIM", "RUF", "S"]
 "tests/**" = ["S101"]
 
 [tool.ruff.lint.isort]
-known-first-party = ["hotspots", "inventory", "scan"]
+known-first-party = ["hotspots", "inventory", "report", "result_schema", "scan"]
 
 [tool.mypy]
 python_version = "3.10"
@@ -28,6 +28,7 @@ mypy_path = [
     "skills/shipkeep-publish-check/scripts",
     "skills/shipkeep-quality-tools/scripts",
     "skills/shipkeep-refactor/scripts",
+    "skills/shipkeep-report/scripts",
 ]
 
 [tool.pytest.ini_options]
@@ -44,5 +45,5 @@ skip_covered = true
 # 2026-11-04 に測った値を、小数第 2 位で切り捨てた値。
 # 丸めると、pytest-cov が下限に届かない (FAIL) と表示しながら成功する。
 # 下回ったら失敗にする。テストを足して上がったら、この値も上げる。
-fail_under = 97.81
+fail_under = 98.58
 precision = 2
