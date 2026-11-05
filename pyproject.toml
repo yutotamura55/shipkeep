@@ -44,5 +44,5 @@ skip_covered = true
 # 2026-11-04 に測った値を、小数第 2 位で切り捨てた値。
 # 丸めると、pytest-cov が下限に届かない (FAIL) と表示しながら成功する。
 # 下回ったら失敗にする。テストを足して上がったら、この値も上げる。
-fail_under = 96.95
+fail_under = 97.68
 precision = 2

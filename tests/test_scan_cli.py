@@ -107,3 +107,17 @@ def test_executable_raises_when_the_command_is_not_on_path(
 
     with pytest.raises(OSError, match="not on PATH"):
         scan.executable("git")
+
+
+def test_main_exits_with_2_when_the_denylist_cannot_be_read(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    repo = GitRepo(tmp_path)
+    repo.commit({"a.txt": "x\n"})
+    missing = tmp_path / "no-such-denylist.txt"
+
+    assert scan.main([str(tmp_path), "--denylist", str(missing)]) == 2
+
+    err = capsys.readouterr().err
+    assert "cannot read the denylist file" in err
+    assert str(missing) not in err
