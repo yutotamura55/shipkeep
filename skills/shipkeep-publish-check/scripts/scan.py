@@ -96,6 +96,13 @@ EMAIL = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-
 # RFC 2606 で文書用に予約されたドメイン。公開してよいのは完全に一致するものだけで、
 # mail.example.net のようなサブドメインは報告する。
 EXAMPLE_DOMAINS = {"example.com", "example.org", "example.net"}
+# サービスが自分のコミットの署名に書くアドレス。個人のものではないので公開してよい。
+# 小文字で、アドレス全体の完全一致でだけ許す。今は Dependabot の Signed-off-by のアドレス
+# (2026-11-04 に確認) だけ。
+SERVICE_ADDRESSES = {"support@github.com"}
+# 名前が [bot] で終わるトレーラーのアドレスを一律に許す規則は置かない。名前は誰でも書けるので、
+# 個人のアドレスを隠す抜け道になる (2026-11-04 の独立レビューで確認)。ボットを足すときは、
+# そのボットが実際に使うアドレスを確かめて SERVICE_ADDRESSES に書く。
 # logo@2x.png のような素材のファイル名は、メールアドレスに見える。
 FILE_EXTENSIONS = {
     "png",
@@ -485,9 +492,11 @@ def is_noreply_address(address: str) -> bool:
 
 def is_public_address(address: str) -> bool:
     """本文にあるアドレス風の文字列を公開してよいかを返す。"""
-    local, _, domain = address.lower().rpartition("@")
+    lowered = address.lower()
+    local, _, domain = lowered.rpartition("@")
     return (
-        is_noreply_address(address)
+        is_noreply_address(lowered)
+        or lowered in SERVICE_ADDRESSES
         or "noreply" in local
         or "no-reply" in local
         or local == "git"
@@ -574,11 +583,8 @@ def masked(text: str, denylist: list[str]) -> str:
     detected: list[Span] = []
     for kind, pattern in SECRET_PATTERNS.items():
         detected += [(m.start(), m.end(), kind) for m in pattern.finditer(text)]
-    detected += [
-        (m.start(), m.end(), "email_address")
-        for m in EMAIL.finditer(text)
-        if not is_public_address(m.group(0))
-    ]
+    # 公開してよいアドレスも伏せる。context に値を出さないためで、検出の判定とは分ける。
+    detected += [(m.start(), m.end(), "email_address") for m in EMAIL.finditer(text)]
     detected += local_path_spans(text)
     for number, term in enumerate(denylist, 1):
         detected += [

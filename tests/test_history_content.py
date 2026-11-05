@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
 from gitrepo import GitRepo
 
 import scan
@@ -94,6 +95,72 @@ def test_personal_data_passes_for_noreply_and_example_addresses(tmp_path: Path) 
     assert check(tmp_path, "history_personal_data")["status"] == "pass"
 
 
+def test_personal_data_passes_for_a_dependabot_commit_message(tmp_path: Path) -> None:
+    repo = GitRepo(tmp_path)
+    # Dependabot が付ける署名。アドレスは実行時に組み立てる。
+    signoff = "Signed-off-by: dependabot[bot] <" + "support" + "@" + "github.com>"
+    repo.commit({"package.json": "{}\n"}, message=f"build(deps): bump x\n\n{signoff}\n")
+
+    assert check(tmp_path, "history_personal_data")["status"] == "pass"
+
+
+def test_personal_data_reports_a_bot_named_trailer_with_an_unknown_address(tmp_path: Path) -> None:
+    repo = GitRepo(tmp_path)
+    # 名前の [bot] だけでは許さない。アドレスが SERVICE_ADDRESSES になければ個人のものとして扱う。
+    trailer = f"Co-authored-by: someone[bot] <{PERSONAL_EMAIL}>"
+    commit = repo.commit({"a.txt": "x\n"}, message=f"chore\n\n{trailer}\n")
+
+    assert findings(check(tmp_path, "history_personal_data")) == [
+        {"kind": "email_in_commit_message", "commit": commit[:12]}
+    ]
+
+
+def test_personal_data_reports_a_trailer_whose_name_is_not_a_bot(tmp_path: Path) -> None:
+    repo = GitRepo(tmp_path)
+    commit = repo.commit(
+        {"a.txt": "x\n"}, message=f"chore\n\nCo-authored-by: Someone <{PERSONAL_EMAIL}>\n"
+    )
+
+    found = check(tmp_path, "history_personal_data")
+
+    assert findings(found) == [{"kind": "email_in_commit_message", "commit": commit[:12]}]
+
+
+def test_personal_data_reports_a_personal_address_on_the_service_domain(tmp_path: Path) -> None:
+    repo = GitRepo(tmp_path)
+    same_domain = "someone" + "@" + "github.com"
+    commit = repo.commit({"a.txt": "x\n"}, message=f"chore\n\nCc: {same_domain}\n")
+
+    found = check(tmp_path, "history_personal_data")
+
+    assert findings(found) == [{"kind": "email_in_commit_message", "commit": commit[:12]}]
+
+
+def test_personal_data_counts_only_the_personal_line_and_masks_every_address(
+    tmp_path: Path,
+) -> None:
+    repo = GitRepo(tmp_path)
+    service = "support" + "@" + "github.com"
+    commit = repo.commit({"notes.md": f"service {service}\npersonal {PERSONAL_EMAIL}\n"})
+
+    found = check(tmp_path, "history_personal_data")
+
+    assert findings(found) == [
+        {
+            "kind": "email_address",
+            "commit": commit[:12],
+            "path": "notes.md",
+            "line": 2,
+            "context": "personal <email_address>",
+        }
+    ]
+
+
+def test_masking_hides_public_addresses_too() -> None:
+    public = "1+me" + "@" + "users.noreply.github.com"
+    assert scan.masked(f"by {public} today", []) == "by <email_address> today"
+
+
 def test_personal_data_finds_an_address_and_a_home_path(tmp_path: Path) -> None:
     repo = GitRepo(tmp_path)
     commit = repo.commit({"notes.md": f"mail {PERSONAL_EMAIL}\nsee {HOME_PATH}\n"})
@@ -179,3 +246,17 @@ def test_personal_data_ignores_text_that_only_looks_like_a_home_path(tmp_path: P
     repo.commit({"scan.py": 're.compile(r"/Users/([^/\\s]+)/")\n'})
 
     assert check(tmp_path, "history_personal_data")["status"] == "pass"
+
+
+@pytest.mark.parametrize(
+    ("path", "kind"),
+    [
+        ("infra/prod.tfvars", "terraform_variables"),
+        ("keys/id_ed25519", "private_key_file"),
+        ("android/release.keystore", "private_key_file"),
+        ("home/.netrc", "credentials_file"),
+        ("src/app.py", None),
+    ],
+)
+def test_sensitive_file_kind_covers_every_kind(path: str, kind: str | None) -> None:
+    assert scan.sensitive_file_kind(path) == kind
