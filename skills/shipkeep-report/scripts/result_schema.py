@@ -1,6 +1,8 @@
-"""shared/result.schema.json に対する、テスト用の小さな検証。
+"""shipkeep の結果の形式 (references/result.schema.json) に対する、小さな検証。
 
-jsonschema ライブラリに頼らず、スキーマが使う語だけを実装する: type、required、properties、
+report.py とテストが使う。原本のスキーマは shared/result.schema.json で、この skill の
+references/ に同じ内容の写しを置く。jsonschema ライブラリに頼らず (skill のスクリプトは
+標準ライブラリだけを使う)、スキーマが使う語だけを実装する: type、required、properties、
 additionalProperties、items、enum、const、pattern、minimum、minLength、$ref (#/$defs/...)、
 format (date-time だけ)、allOf、if/then/else、not。検証の前にスキーマ全体を走査し、対応しない語や
 format があれば ValueError にして、黙って通さない。
@@ -14,7 +16,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-SCHEMA_PATH = Path(__file__).resolve().parents[1] / "shared" / "result.schema.json"
+SCHEMA_PATH = Path(__file__).resolve().parents[1] / "references" / "result.schema.json"
 TYPES = {
     "object": dict,
     "array": list,
@@ -88,7 +90,8 @@ def _resolve(ref: str, root: dict[str, Any]) -> dict[str, Any]:
     node: Any = root
     for part in ref[2:].split("/"):
         node = node[part]
-    assert isinstance(node, dict)
+    if not isinstance(node, dict):
+        raise ValueError(f"$ref does not point to a schema: {ref}")
     return node
 
 

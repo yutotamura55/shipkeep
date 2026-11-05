@@ -8,11 +8,11 @@ from typing import Any
 
 import pytest
 from gitrepo import GitRepo
-from result_schema import load_schema, validate
 
 import hotspots
 import inventory
 import scan
+from result_schema import load_schema, validate
 
 PERSONAL_EMAIL = "someone" + "@" + "mail.example.net"
 
@@ -318,3 +318,17 @@ def test_the_validator_rejects_impossible_date_times(value: str) -> None:
     assert validate(value, {"type": "string", "format": "date-time"}) == [
         "$: not an RFC 3339 date-time"
     ]
+
+
+def test_the_validator_reports_type_and_length_errors() -> None:
+    schema = {"type": "object", "properties": {"a": {"type": "string", "minLength": 2}}}
+    assert validate({"a": 1}, schema) == ["$.a: must be string"]
+    assert validate({"a": "x"}, schema) == ["$.a: shorter than 2"]
+
+
+def test_the_validator_rejects_refs_it_cannot_follow() -> None:
+    with pytest.raises(ValueError, match="unsupported"):
+        validate(1, {"$ref": "other.json#/x"})
+    # 事前の走査は $defs の中身を確かめるので、配列を指す参照は required などで作る。
+    with pytest.raises(ValueError, match="does not point"):
+        validate(1, {"required": ["a"], "$ref": "#/required"})
