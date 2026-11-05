@@ -58,6 +58,8 @@ class Language:
     # 本文を探す設定ファイル。共通の設定ファイル (SHARED_CONFIGS) にも加えて探す。
     configs: tuple[str, ...]
     aspects: dict[str, tuple[Tool, ...]]
+    # 推奨の道具の表がある参照のファイル (references/ の下)。
+    reference: str
 
 
 PYTHON_CONFIGS = (
@@ -118,6 +120,7 @@ PYTHON = Language(
     markers=("pyproject.toml", "setup.py", "setup.cfg", "*requirements*.txt", "Pipfile"),
     extensions=("py",),
     configs=PYTHON_CONFIGS,
+    reference="python.md",
     aspects={
         "format": (
             Tool("ruff format", r"\bruff[ -]format\b|\[tool\.ruff\.format\]"),
@@ -170,6 +173,7 @@ JAVASCRIPT = Language(
     markers=("package.json",),
     extensions=("js", "mjs", "cjs", "jsx", "ts", "mts", "cts", "tsx", "vue", "svelte"),
     configs=JAVASCRIPT_CONFIGS,
+    reference="javascript.md",
     aspects={
         "format": (
             Tool("prettier", r"\bprettier\b", (".prettierrc*", "prettier.config.*")),
@@ -478,87 +482,109 @@ SECURITY_ASPECTS = {
 }
 
 
-# 足りない観点の直し方に書く、参照の推奨の道具 (references/<言語>.md と common.md の表の写し)。
-# 表の先頭の道具とは限らないので、推奨を名指しで持つ。
-RECOMMENDED: dict[str, dict[str, str]] = {
-    "python": {
-        "format": "Ruff (`ruff format`)",
-        "lint": "Ruff (`ruff check`)",
-        "type_check": "mypy, with `strict = true` for a new project",
-        "security_lint": "Ruff's `S` rules, plus Semgrep or Opengrep",
-        "tests": "pytest",
-        "coverage": "pytest-cov, with the floor at the measured coverage",
-        "unused_code": "vulture, reviewing its findings",
-        "unused_dependencies": (
-            "a tool chosen after checking its current status (deptry is a candidate)"
-        ),
-        "dependency_audit": "pip-audit",
-    },
-    "javascript": {
-        "format": "Prettier",
-        "lint": "ESLint",
-        "type_check": "`tsc --noEmit` with `strict` in `tsconfig.json`",
-        "security_lint": "Semgrep or Opengrep",
-        "tests": "Vitest",
-        "coverage": (
-            "Vitest coverage (`@vitest/coverage-v8`), with the floor at the measured coverage"
-        ),
-        "unused_code": "Knip, reviewing its findings",
-        "unused_dependencies": "Knip",
-        "dependency_audit": "`npm audit` (or the package manager's equivalent)",
-    },
-}
-REPOSITORY_RECOMMENDED = {
+REFERENCES = Path(__file__).resolve().parents[1] / "references"
+# リポジトリ全体の観点の直し方。観点ごとにすることが違う (コマンド、workflow、設定) ので、
+# 1 つの定型文にせず観点ごとに書く。推奨は references/common.md に合わせる。
+REPOSITORY_FIXES = {
     "check_command": (
-        "one command that runs every check, such as `scripts/check.sh`, documented in the "
-        "README or AGENTS.md"
+        "Add one command that runs every check (such as scripts/check.sh), document it in the "
+        "README or AGENTS.md, and run it in CI (references/common.md, One check command)"
     ),
-    "ci": "a CI workflow that runs the check command on every pull request",
-    "workflow_lint": "actionlint",
-    "workflow_security": "zizmor",
-    "sast": "Semgrep CE or Opengrep, fetching the rules at run time",
-    "dependency_audit": "OSV-Scanner, or the audit of each language",
-    "dependency_updates": "Dependabot (`.github/dependabot.yml`) or Renovate",
+    "ci": (
+        "Add a CI workflow that runs the check command on every pull request, with actions "
+        "pinned to commit SHAs and minimal permissions (references/common.md)"
+    ),
+    "workflow_lint": (
+        "Run actionlint on the workflows from the check command (references/common.md)"
+    ),
+    "workflow_security": (
+        "Run zizmor on the workflows from the check command (references/common.md)"
+    ),
+    "sast": (
+        "Run Semgrep CE or Opengrep from the check command, fetching the rules at run time "
+        "instead of copying them (references/common.md)"
+    ),
+    "dependency_audit": (
+        "Audit the dependencies of each language with its own tool (for example pip-audit or "
+        "npm audit) from the check command; use OSV-Scanner for languages without one or for a "
+        "single report across languages (references/common.md, Dependencies)"
+    ),
+    "dependency_updates": (
+        "Add .github/dependabot.yml (or Renovate) with minor and patch updates grouped, and "
+        "turn on Dependabot security updates in the repository settings (references/common.md)"
+    ),
     "dependency_review": (
-        "`actions/dependency-review-action`, after turning on the dependency graph"
+        "Turn on the dependency graph, then add actions/dependency-review-action to a pull "
+        "request workflow, pinned to a commit SHA (references/common.md, Dependencies)"
     ),
-    "diff_coverage": "diff-cover on the coverage report",
+    "diff_coverage": (
+        "Write a Cobertura-style coverage report and run diff-cover against the base branch in "
+        "CI (references/common.md, Coverage)"
+    ),
 }
-REFERENCE_FILES = {"python": "references/python.md", "javascript": "references/javascript.md"}
+CODEQL_FIX = (
+    "Check whether CodeQL default setup is on in Settings → Advanced Security, and turn it on "
+    "where the repository can use code scanning (references/common.md)"
+)
+RESEARCH_FIX = (
+    "Research the tools for this language as references/other-languages.md describes, and "
+    "cite the sources"
+)
 
 
-def remediation(row: Row) -> str | None:
-    """観点の行の直し方を返す。fail と unknown 以外、または書くことがなければ None。"""
+def recommendations(reference: str) -> dict[str, str]:
+    """参照の表の「Recommended」の列を、観点の名前から文への辞書にして返す。
+
+    写しを持たず、実行のたびに参照を読む。読めなければ空で、呼び出し側は参照の場所だけを示す。
+    文に付いたバッククォートは外す (Issue の本文ではコードスパンの中に置かれるため)。
+    """
+    try:
+        text = (REFERENCES / reference).read_text(encoding="utf-8")
+    except OSError:
+        return {}
+    found: dict[str, str] = {}
+    for line in text.splitlines():
+        cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
+        if len(cells) < 2 or cells[0] in ("Aspect", "---") or not cells[0]:
+            continue
+        aspect = cells[0].lower().replace(" ", "_")
+        if aspect in LANGUAGE_ASPECTS:
+            found[aspect] = cells[1].replace("`", "")
+    return found
+
+
+def remediation(row: Row, reference: bool = True) -> str | None:
+    """観点の行の直し方を返す。fail と unknown 以外、または書くことがなければ None。
+
+    reference は、行の言語に参照があるか (inventory() の languages の reference)。
+    """
     aspect, scope, status = row["aspect"], row["scope"], row["status"]
-    if status == "unknown" and aspect == "codeql":
-        return (
-            "Check whether CodeQL default setup is on in Settings → Advanced Security, and turn "
-            "it on where the repository can use code scanning"
-        )
     if status == "unknown":
-        return (
-            "Research the tools for this language as references/other-languages.md of "
-            "shipkeep-quality-tools describes, and cite the sources"
-        )
+        if aspect == "codeql":
+            return CODEQL_FIX
+        if scope != "repository" and not reference:
+            return RESEARCH_FIX
+        return None
     if status != "fail":
         return None
     if scope == "repository":
-        tool = REPOSITORY_RECOMMENDED.get(aspect)
-        where = "references/common.md"
-    else:
-        tool = RECOMMENDED.get(scope, {}).get(aspect)
-        where = REFERENCE_FILES.get(scope, "references/common.md")
-    if tool is None:
-        return None
-    return (
-        f"Add {tool} (see {where} of shipkeep-quality-tools for the current version and "
-        "settings), run it from the check command, and run that command in CI"
-    )
+        return REPOSITORY_FIXES.get(aspect)
+    language = next((lang for lang in REFERENCED_LANGUAGES if lang.id == scope), None)
+    if language is None:
+        return RESEARCH_FIX
+    where = f"references/{language.reference} of shipkeep-quality-tools"
+    recommended = recommendations(language.reference).get(aspect)
+    text = f"Use what {where} recommends for {aspect}"
+    text += f": {recommended}." if recommended else "."
+    if recommended and "common layer" in recommended:
+        text += " For tools from the common layer, see references/common.md."
+    return text + " Check its current version, run it from the check command, and run that in CI"
 
 
 def to_result(output: dict[str, Any], commit: str | None) -> dict[str, Any]:
     """inventory() の出力を shared/result.schema.json の形式にする。"""
     items: list[dict[str, Any]] = []
+    references = {language["id"]: language["reference"] for language in output["languages"]}
     for language in output["languages"]:
         items.append(
             {
@@ -600,7 +626,7 @@ def to_result(output: dict[str, Any], commit: str | None) -> dict[str, Any]:
             item["note"] = row["note"]
         if row["status"] == "fail":
             item["severity"] = "medium" if row["aspect"] in SECURITY_ASPECTS else "low"
-        fix = remediation(row)
+        fix = remediation(row, references.get(row["scope"], True))
         if fix:
             item["remediation"] = fix
         items.append(item)

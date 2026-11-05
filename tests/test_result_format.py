@@ -348,12 +348,19 @@ def test_scan_remediations_match_the_skill_md_table() -> None:
     skill_md = (
         Path(__file__).resolve().parents[1] / "skills/shipkeep-publish-check/SKILL.md"
     ).read_text(encoding="utf-8")
-    rows = {}
-    for line in skill_md.splitlines():
+    # 「What each check means and how to fix it」の表だけを読む。
+    lines = skill_md.splitlines()
+    start = lines.index("| Check | What it looks for | How to fix |")
+    rows: dict[str, str] = {}
+    for line in lines[start + 2 :]:
+        if not line.startswith("|"):
+            break
         cells = [cell.strip() for cell in line.strip().strip("|").split(" | ")]
-        if len(cells) == 3 and cells[0].startswith("`") and cells[0].endswith("`"):
-            rows[cells[0].strip("`")] = cells[2].replace("**", "")
-    assert set(scan.REMEDIATIONS) == set(scan.SEVERITIES)
+        assert len(cells) == 3, line
+        check_id = cells[0].strip("`")
+        assert check_id not in rows, check_id
+        rows[check_id] = cells[2].replace("**", "").replace("`", "")
+    assert set(rows) == set(scan.REMEDIATIONS) == set(scan.SEVERITIES)
     for check_id, text in scan.REMEDIATIONS.items():
         assert rows[check_id] == text, check_id
 
@@ -366,19 +373,93 @@ def test_scan_result_puts_the_remediation_on_failed_items(
     document = run(scan.main, [str(tmp_path), "--format", "result"], capsys)
 
     for item in document["items"]:
-        assert ("remediation" in item) == (item["status"] == "fail"), item["id"]
+        has_fix = item["status"] in ("fail", "unknown")
+        assert ("remediation" in item) == has_fix, item["id"]
+        assert "`" not in item.get("remediation", "")
     assert validate(document) == []
+
+
+def test_scan_result_explains_unknown_items(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    make_repo(tmp_path)
+    output = scan.scan(tmp_path)
+    output["checks"][0]["status"] = "unknown"
+
+    document = scan.to_result(output, None)
+
+    fix = document["items"][0]["remediation"]
+    assert fix.startswith("The scan could not verify this")
+    assert scan.REMEDIATIONS[document["items"][0]["id"]] in fix
 
 
 def test_inventory_has_a_remediation_for_every_aspect_that_can_fail() -> None:
     for language in inventory.REFERENCED_LANGUAGES:
+        recommended = inventory.recommendations(language.reference)
+        # 参照の表は、どの観点にも推奨を書いている。
+        assert set(recommended) == set(inventory.LANGUAGE_ASPECTS), language.id
         for aspect in inventory.LANGUAGE_ASPECTS:
-            row = {"aspect": aspect, "scope": language.id, "status": "fail"}
-            assert inventory.remediation(row), (language.id, aspect)
+            fix = inventory.remediation({"aspect": aspect, "scope": language.id, "status": "fail"})
+            assert fix is not None
+            assert f"references/{language.reference}" in fix
+            assert recommended[aspect] in fix
+            assert "`" not in fix
     for aspect, _, _ in inventory.REPOSITORY_ASPECTS:
         if aspect in inventory.OPTIONAL_ASPECTS or aspect == "codeql":
             continue
-        assert inventory.remediation({"aspect": aspect, "scope": "repository", "status": "fail"})
+        fix = inventory.remediation({"aspect": aspect, "scope": "repository", "status": "fail"})
+        assert fix is not None, aspect
+        assert "`" not in fix
+
+
+def test_repository_fixes_fit_each_aspect() -> None:
+    def fix(aspect: str) -> str:
+        text = inventory.remediation({"aspect": aspect, "scope": "repository", "status": "fail"})
+        assert text is not None
+        return text
+
+    assert "from the check command" not in fix("check_command")
+    assert "from the check command" not in fix("ci")
+    assert "dependabot.yml" in fix("dependency_updates")
+    assert "dependency graph" in fix("dependency_review")
+    audit = fix("dependency_audit")
+    assert audit.index("own tool") < audit.index("OSV-Scanner")
+
+
+def test_security_lint_points_to_the_common_layer() -> None:
+    fix = inventory.remediation(
+        {"aspect": "security_lint", "scope": "javascript", "status": "fail"}
+    )
+    assert fix is not None
+    assert "references/common.md" in fix
+
+
+def test_recommendations_without_the_reference_file(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(inventory, "REFERENCES", tmp_path)
+    assert inventory.recommendations("python.md") == {}
+    fix = inventory.remediation({"aspect": "lint", "scope": "python", "status": "fail"})
+    assert fix == (
+        "Use what references/python.md of shipkeep-quality-tools recommends for lint. "
+        "Check its current version, run it from the check command, and run that in CI"
+    )
+
+
+def test_unknown_rows_get_a_fix_only_when_one_applies() -> None:
+    def fix(scope: str, aspect: str, reference: bool) -> str | None:
+        return inventory.remediation(
+            {"aspect": aspect, "scope": scope, "status": "unknown"}, reference
+        )
+
+    assert fix("go", "lint", False) == inventory.RESEARCH_FIX
+    assert fix("repository", "codeql", True) == inventory.CODEQL_FIX
+    assert fix("repository", "sast", True) is None
+    assert fix("python", "lint", True) is None
+    # 参照のない言語の fail (今はない) も、調べ方を返す。
+    assert inventory.remediation({"aspect": "lint", "scope": "go", "status": "fail"}) == (
+        inventory.RESEARCH_FIX
+    )
 
 
 def test_inventory_result_puts_remediations_on_failed_and_unknown_items(
@@ -393,6 +474,7 @@ def test_inventory_result_puts_remediations_on_failed_and_unknown_items(
     items = {item["id"]: item for item in document["items"]}
     assert "pip-audit" in items["dependency_audit/python"]["remediation"]
     assert "references/python.md" in items["dependency_audit/python"]["remediation"]
+    assert "own tool" in items["dependency_audit/repository"]["remediation"]
     assert "other-languages.md" in items["lint/go"]["remediation"]
     assert "Advanced Security" in items["codeql/repository"]["remediation"]
     assert "remediation" not in items["lint/python"]
@@ -403,3 +485,15 @@ def test_inventory_has_no_remediation_for_passing_or_unlisted_aspects() -> None:
     assert inventory.remediation({"aspect": "lint", "scope": "python", "status": "pass"}) is None
     unlisted = {"aspect": "something_new", "scope": "repository", "status": "fail"}
     assert inventory.remediation(unlisted) is None
+
+
+def test_recommendations_ignore_rows_that_are_not_aspects(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    (tmp_path / "x.md").write_text(
+        "| Aspect | Recommended | Notes |\n| --- | --- | --- |\n"
+        "| Lint | `tool-a` | x |\n| Packaging | tool-b | y |\n| Other | text |\n"
+    )
+    monkeypatch.setattr(inventory, "REFERENCES", tmp_path)
+
+    assert inventory.recommendations("x.md") == {"lint": "tool-a"}

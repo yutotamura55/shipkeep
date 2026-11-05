@@ -1187,18 +1187,19 @@ SEVERITIES = {
     "security_policy": "low",
 }
 # 共通の結果の形式で fail の項目に付ける直し方。SKILL.md の表の「How to fix」の列と同じ文
-# (太字の記号を除く)。tests/test_result_format.py で一致を確かめる。
+# (太字とバッククォートの記号を除く。Issue の本文ではコードスパンの中に置かれるため)。
+# tests/test_result_format.py で表との一致を確かめる。
 REMEDIATIONS = {
     "history_coverage": (
-        "Run `git fetch --unshallow`, or fetch all branches, then scan again. "
+        "Run git fetch --unshallow, or fetch all branches, then scan again. "
         "Until then, treat passing history checks as unconfirmed"
     ),
     "commit_identity": (
-        "Set the noreply address in Git, then rewrite the history with `git filter-repo --mailmap`"
+        "Set the noreply address in Git, then rewrite the history with git filter-repo --mailmap"
     ),
     "history_secrets": (
         "Revoke and replace the credential first: removing it from history does not make a "
-        "leaked key safe. Then remove it with `git filter-repo`"
+        "leaked key safe. Then remove it with git filter-repo"
     ),
     "history_personal_data": (
         "Edit the files and rewrite the history, or accept it if the user decides the data "
@@ -1268,6 +1269,11 @@ def to_result(output: dict[str, Any], commit: str | None) -> dict[str, Any]:
         if check["status"] == "fail":
             item["severity"] = SEVERITIES[check["id"]]
             item["remediation"] = REMEDIATIONS[check["id"]]
+        elif check["status"] == "unknown":
+            item["remediation"] = (
+                "The scan could not verify this; check it by hand (settings need gh signed in "
+                f"with admin access). If it fails: {REMEDIATIONS[check['id']]}"
+            )
         items.append(item)
     result: dict[str, Any] = {
         "format": RESULT_FORMAT,
