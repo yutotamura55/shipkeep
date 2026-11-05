@@ -52,7 +52,10 @@ output of the commands you run:
 
    The script prints one JSON document. It holds kinds, locations, and masked
    lines only, never a secret, an address, a path, or a denylist term, so the
-   user can safely share it. Exit code 2 means the path is not a Git repository,
+   user can safely share it. With `--format result` it prints the same facts
+   in the common shipkeep result format (`references/result.schema.json`),
+   which the Issue converter and other shipkeep skills read; use it when the
+   result will be filed or kept, and the default shape when you only read it. Exit code 2 means the path is not a Git repository,
    Git is missing or failed, the repository is a partial clone (reading its
    history could fetch objects into it; scan a full clone instead), or the
    denylist cannot be read; report the message and stop.

@@ -26,7 +26,10 @@ repository: follow `references/change-principles.md` from that point.
 
    It prints one JSON document: the languages it found (`languages`), and one
    row per aspect (`aspects`) with `status`, the tools it found, and the files
-   that show them (`evidence`). It reads tracked files only. Exit code 2 means
+   that show them (`evidence`). With `--format result` it prints the same
+   facts in the common shipkeep result format (`references/result.schema.json`)
+   for filing or keeping; the default shape is for reading. It reads tracked
+   files only. Exit code 2 means
    the path is not in a Git repository, Git failed, or an argument is invalid
    (for example an unknown `--language` id; `--help` lists them). Read the
    message, fix the call if it was the arguments, otherwise report and stop.

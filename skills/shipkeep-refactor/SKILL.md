@@ -22,7 +22,9 @@ throughout; the steps below add what refactoring needs on top.
    ```
 
    It prints JSON with the source files that changed most often in recent
-   commits, multiplied by their size (`score`). Exit code 2 means the script
+   commits, multiplied by their size (`score`). With `--format result` it
+   prints the same list in the common shipkeep result format
+   (`references/result.schema.json`) for filing or keeping. Exit code 2 means the script
    could not run (wrong arguments, Git missing or failing, or no repository with
    commits); report its message and stop. For the top
    files, measure complexity and duplication as `references/measurement.md`

@@ -22,6 +22,7 @@ import subprocess
 import sys
 from collections import Counter
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any, NoReturn
 
@@ -464,6 +465,91 @@ KNOWN_LANGUAGE_IDS = tuple(lang.id for lang in REFERENCED_LANGUAGES) + tuple(
     row[0] for row in OTHER_LANGUAGES
 )
 
+RESULT_FORMAT = "shipkeep-result/1"
+TOOL_NAME = "shipkeep-quality-tools"
+# 足りないと攻撃や脆弱性を見逃す観点は medium、ほかは low。
+SECURITY_ASPECTS = {
+    "security_lint",
+    "sast",
+    "dependency_audit",
+    "dependency_updates",
+    "dependency_review",
+    "workflow_security",
+}
+
+
+def to_result(output: dict[str, Any], commit: str | None) -> dict[str, Any]:
+    """inventory() の出力を shared/result.schema.json の形式にする。"""
+    items: list[dict[str, Any]] = []
+    for language in output["languages"]:
+        items.append(
+            {
+                "id": f"language/{language['id']}",
+                "check": "language",
+                "scope": language["id"],
+                "status": "info",
+                "confidence": "confirmed" if language["detected_by"] == "declared" else "likely",
+                "summary": f"{language['name']} detected by {language['detected_by']}"
+                + ("" if language["reference"] else "; no reference, research the tools"),
+                "evidence": [{"kind": "file", "path": path} for path in language["evidence"]],
+            }
+        )
+    for extension in output["unrecognized_source_extensions"]:
+        items.append(
+            {
+                "id": f"unrecognized_extension/{extension}",
+                "check": "unrecognized_extension",
+                "status": "info",
+                "confidence": "likely",
+                "summary": f"source files with the extension .{extension} belong to a language "
+                "the inventory does not know; decide the language and research its tools",
+            }
+        )
+    for row in output["aspects"]:
+        item: dict[str, Any] = {
+            "id": f"{row['aspect']}/{row['scope']}",
+            "check": row["aspect"],
+            "scope": row["scope"],
+            "status": row["status"],
+            "confidence": "likely",
+            "summary": f"{row['aspect']} for {row['scope']}: {row['status']}"
+            + (f" ({', '.join(row['tools'])})" if row["tools"] else ""),
+            "evidence": [{"kind": "file", "path": path} for path in row["evidence"]],
+        }
+        if row["tools"]:
+            item["evidence"].append({"kind": "tools", "detail": ", ".join(row["tools"])})
+        if row.get("note"):
+            item["note"] = row["note"]
+        if row["status"] == "fail":
+            item["severity"] = "medium" if row["aspect"] in SECURITY_ASPECTS else "low"
+        items.append(item)
+    result: dict[str, Any] = {
+        "format": RESULT_FORMAT,
+        "tool": {"name": TOOL_NAME},
+        "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "counts": count_statuses(items),
+        "items": items,
+    }
+    if commit:
+        result["target"] = {"commit": commit}
+    return result
+
+
+def count_statuses(items: list[dict[str, Any]]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for item in items:
+        counts[item["status"]] = counts.get(item["status"], 0) + 1
+    return counts
+
+
+def head_commit(root: Path) -> str | None:
+    """HEAD のコミットの SHA。コミットがないか読めなければ None。"""
+    try:
+        code, out = run_git(executable("git"), root, "rev-parse", "--verify", "--quiet", "HEAD")
+    except OSError:
+        return None
+    return out.strip() if code == 0 and out.strip() else None
+
 
 def inventory(root: Path, declared: tuple[str, ...] = ()) -> dict[str, Any]:
     """リポジトリを調べ、言語ごとの観点と、言語を問わない観点の結果を返す。
@@ -621,12 +707,20 @@ def main(argv: list[str] | None = None) -> int:
             "(repeatable); one of: " + ", ".join(KNOWN_LANGUAGE_IDS)
         ),
     )
+    parser.add_argument(
+        "--format",
+        choices=("aspects", "result"),
+        default="aspects",
+        help="output shape: aspects (default) or the common shipkeep result format",
+    )
     args = parser.parse_args(argv)
     try:
         result = inventory(Path(args.repository), tuple(args.language))
     except InventoryError as error:
         print(f"error: {error}", file=sys.stderr)
         return 2
+    if args.format == "result":
+        result = to_result(result, head_commit(Path(args.repository)))
     print(json.dumps(result, ensure_ascii=False, indent=2))
     return 0
 

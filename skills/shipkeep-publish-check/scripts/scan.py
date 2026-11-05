@@ -21,6 +21,7 @@ import subprocess
 import sys
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any, NoReturn
 
@@ -1166,6 +1167,78 @@ def hide_confidential_paths(checks: list[Check], denylist: list[str]) -> None:
                     finding[field] = HIDDEN_PATH
 
 
+RESULT_FORMAT = "shipkeep-result/1"
+TOOL_NAME = "shipkeep-publish-check"
+# 共通の結果の形式での重大度。fail のときだけ付ける。
+SEVERITIES = {
+    "history_secrets": "critical",
+    "sensitive_files": "critical",
+    "history_personal_data": "high",
+    "denylist": "high",
+    "history_coverage": "medium",
+    "commit_identity": "medium",
+    "env_files": "medium",
+    "license": "medium",
+    "github_settings": "medium",
+    "private_reporting": "medium",
+    "dependabot_alerts": "medium",
+    "workflow_token": "medium",
+    "readme": "low",
+    "security_policy": "low",
+}
+# パターンの一致で見つける検査は likely、ファイルや設定を読む検査は confirmed。
+PATTERN_CHECKS = {"history_secrets", "history_personal_data", "denylist"}
+EVIDENCE_KEYS = ("kind", "commit", "path", "line", "context")
+
+
+def head_commit(root: Path) -> str | None:
+    """HEAD のコミットの SHA。コミットがなければ None。"""
+    return git(root, "rev-parse", "--verify", "--quiet", "HEAD", check=False).strip() or None
+
+
+def count_statuses(items: list[dict[str, Any]]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for item in items:
+        counts[item["status"]] = counts.get(item["status"], 0) + 1
+    return counts
+
+
+def to_evidence(finding: Finding) -> dict[str, Any]:
+    """finding を共通の形式の evidence にする。知らない項目は detail にまとめる。"""
+    evidence: dict[str, Any] = {key: finding[key] for key in EVIDENCE_KEYS if key in finding}
+    rest = [f"{key}={finding[key]}" for key in finding if key not in EVIDENCE_KEYS]
+    if rest:
+        evidence["detail"] = "; ".join(rest)
+    return evidence
+
+
+def to_result(output: dict[str, Any], commit: str | None) -> dict[str, Any]:
+    """scan() の出力を shared/result.schema.json の形式にする。"""
+    items = []
+    for check in output["checks"]:
+        item: dict[str, Any] = {
+            "id": check["id"],
+            "check": check["id"],
+            "status": check["status"],
+            "confidence": "likely" if check["id"] in PATTERN_CHECKS else "confirmed",
+            "summary": check["summary"],
+            "evidence": [to_evidence(f) for f in check["findings"]],
+        }
+        if check["status"] == "fail":
+            item["severity"] = SEVERITIES[check["id"]]
+        items.append(item)
+    result: dict[str, Any] = {
+        "format": RESULT_FORMAT,
+        "tool": {"name": TOOL_NAME},
+        "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "counts": count_statuses(items),
+        "items": items,
+    }
+    if commit:
+        result["target"] = {"commit": commit}
+    return result
+
+
 CHECK_IDS = (
     "history_coverage",
     "commit_identity",
@@ -1254,6 +1327,12 @@ def main(argv: list[str] | None = None) -> int:
         type=Path,
         help="file with one term per line that must not appear in the history",
     )
+    parser.add_argument(
+        "--format",
+        choices=("checks", "result"),
+        default="checks",
+        help="output shape: checks (default) or the common shipkeep result format",
+    )
     args = parser.parse_args(argv)
     # エラーメッセージは固定文にする。例外のメッセージにはローカルパスが入ることがある。
     denylist = None
@@ -1277,6 +1356,8 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     try:
         output = scan(root, denylist)
+        if args.format == "result":
+            output = to_result(output, head_commit(root))
     except ScanError as error:
         print(f"error: {error}", file=sys.stderr)
         return 2

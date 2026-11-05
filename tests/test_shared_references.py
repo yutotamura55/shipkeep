@@ -1,4 +1,4 @@
-"""skill ごとに置く共有の文書の写しが、`shared/` の原本と一致することを確かめる。
+"""skill ごとに置く共有の文書・スキーマの写しが、`shared/` の原本と一致することを確かめる。
 
 skills CLI は skill のディレクトリだけを導入先に写す。そのため、複数の skill が使う文書は、
 原本を `shared/` に置き、使う skill の `references/` に同じ内容の写しを置く。
@@ -16,7 +16,7 @@ SHARED = ROOT / "shared"
 def problems(root: Path) -> list[str]:
     """``root`` の skill について、共有の文書の写しの不足・食い違い・未参照を挙げる。"""
     found: list[str] = []
-    for original in sorted((root / "shared").glob("*.md")):
+    for original in sorted(f for f in (root / "shared").iterdir() if f.is_file()):
         reference = f"references/{original.name}"
         for skill in sorted((root / "skills").iterdir()):
             skill_md = skill / "SKILL.md"
@@ -78,3 +78,15 @@ def test_an_unreferenced_copy_is_reported(tmp_path: Path) -> None:
 def test_a_skill_without_reference_or_copy_is_fine(tmp_path: Path) -> None:
     root = make_layout(tmp_path, "No reference here\n", None)
     assert problems(root) == []
+
+
+def test_a_differing_json_copy_is_reported(tmp_path: Path) -> None:
+    root = make_layout(
+        tmp_path,
+        "Read references/change-principles.md and references/x.schema.json\n",
+        "original\n",
+    )
+    (root / "shared" / "x.schema.json").write_text('{"a": 1}\n')
+    (root / "skills" / "demo" / "references" / "x.schema.json").write_text('{"a": 2}\n')
+
+    assert problems(root) == ["demo: references/x.schema.json differs from shared/x.schema.json"]
