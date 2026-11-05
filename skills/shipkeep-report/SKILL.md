@@ -92,13 +92,16 @@ things: do them only after the user approves, and follow
    python3 <this skill's directory>/scripts/report.py create /tmp/plan.json --repo OWNER/NAME --sha256 <digest>
    ```
 
-   It stops when the file no longer has that digest, or when an entry was not
-   made by `plan` (its marker, title, or a mention or cross-repository
-   reference outside code spans). It creates the missing labels, and stops
-   before any Issue if a label cannot be created. Then it creates each Issue,
-   after checking again that no Issue for the same item appeared since the
-   plan. Exit code 1 means some creation failed; report which entries. Report
-   the created Issue numbers.
+   It reads the plan file once and stops when it no longer has that digest.
+   It does not post the bodies written in the file: it builds each body again
+   from the item stored in the plan, with the same code as `plan`, so that
+   every string from a result stays in a code span and cannot mention anyone or
+   reference another repository. It stops when an entry's stored body or title
+   differs from the rebuilt one, or when a label looks like personal data. It
+   creates the missing labels, and stops before any Issue if a label cannot be
+   created. Then it creates each Issue, after checking again that no Issue for
+   the same item appeared since the plan. Exit code 1 means some creation
+   failed; report which entries. Report the created Issue numbers.
 
 5. **Keep the record**, when the user wants it, on a dedicated branch of the
    target repository as `references/change-principles.md` says:

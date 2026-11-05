@@ -154,11 +154,14 @@ def read_json(path: Path, what: str) -> Any:
     return document
 
 
-def write_json(path: Path, document: Any, what: str) -> None:
+def write_json(path: Path, document: Any, what: str) -> str:
+    """JSON を UTF-8 で書き、書いたバイト列の SHA-256 を返す。"""
     try:
-        path.write_text(json.dumps(document, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        data = (json.dumps(document, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
+        path.write_bytes(data)
     except (OSError, UnicodeError) as error:
         raise ReportError(f"cannot write the {what}") from error
+    return hashlib.sha256(data).hexdigest()
 
 
 def load_result(path: Path, position: int) -> dict[str, Any]:
@@ -316,18 +319,6 @@ def code_span(text: str) -> str:
     return f"{fence}{pad}{text}{pad}{fence}"
 
 
-# 本文のうち、コードスパンの外に置いてよいのは決まった文だけ。メンション (@名前) や、ほかの
-# リポジトリの参照 (owner/repo#1) があれば、案が書き換えられたとみなす。
-CODE_SPAN = re.compile(r"(`+)(?!`).*?(?<!`)\1(?!`)")
-NOTIFYING = re.compile(r"@[A-Za-z0-9]|[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+#\d")
-
-
-def notifies(body: str) -> bool:
-    """コードスパンと 1 行目の目印を除いた本文に、通知を起こしうる書き方があるかを返す。"""
-    rest = body.split("\n", 1)[1] if "\n" in body else ""
-    return bool(NOTIFYING.search(CODE_SPAN.sub("", rest)))
-
-
 def marker(key: Key) -> str:
     tool, item_id = key
     return f"<!-- shipkeep-item tool={quote(tool, safe='')} id={quote(item_id, safe='')} -->"
@@ -453,13 +444,13 @@ def make_plan(
     skipped: list[dict[str, Any]] = []
     seen: set[Key] = set()
     for key, item, commit, where in candidates(results, min_severity, include_unknown):
+        if key in seen:
+            continue
+        seen.add(key)
         if any(looks_personal(text) for text in item_texts(item)):
             # 個人情報に見える値は ID に入っていることもあるので、ID を出さず位置で示す。
             skipped.append({**where, "reason": "blocked_personal_data"})
             continue
-        if key in seen:
-            continue
-        seen.add(key)
         entry: dict[str, Any] = {"tool": key[0], "id": key[1]}
         filed = issues.get(key, [])
         open_issue = next((i for i in filed if i["state"] == "open"), None)
@@ -489,8 +480,12 @@ def make_plan(
                 {
                     **entry,
                     "title": title_for(key[0], item),
+                    # 表示のための写し。create は下の item・commit・previous から組み立て直す。
                     "body": body_for(key, item, commit, previous),
                     "labels": list(labels),
+                    "item": item,
+                    "commit": commit,
+                    "previous": previous,
                 }
             )
     return {
@@ -521,44 +516,74 @@ def print_plan(plan: dict[str, Any]) -> None:
 # --- create ---------------------------------------------------------------------------------
 
 
-def load_plan(path: Path) -> dict[str, Any]:
-    plan = read_json(path, "plan file")
+ITEM_SCHEMA_REF = "#/$defs/item"
+COMMIT = re.compile(r"^[0-9a-f]{7,64}$")
+
+
+def parse_plan(data: bytes) -> dict[str, Any]:
+    """案のファイルの中身を読み、各項目の本文を組み立て直して確かめる。
+
+    本文は案のファイルの文字列を使わず、項目のデータから plan と同じ関数で組み立て直す。結果から
+    来た文字列は必ずコードスパンに入るので、メンションや他のリポジトリへの参照は起きない。
+    組み立て直した本文やタイトルが案の写しと違えば、案が書き換えられたとみなす。
+    """
+    try:
+        plan = json.loads(data.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise ReportError(f"the plan file is not in the {PLAN_FORMAT} format") from error
+    schema = result_schema.load_schema()
+    item_schema = {"$ref": ITEM_SCHEMA_REF, "$defs": schema["$defs"]}
     valid = (
         isinstance(plan, dict)
         and plan.get("format") == PLAN_FORMAT
         and isinstance(plan.get("repository"), str)
         and isinstance(plan.get("labels_to_create"), list)
-        and all(isinstance(label, str) and LABEL.match(label) for label in plan["labels_to_create"])
         and isinstance(plan.get("create"), list)
         and all(
             isinstance(entry, dict)
             and all(isinstance(entry.get(k), str) for k in ("tool", "id", "title", "body"))
             and isinstance(entry.get("labels"), list)
-            and all(isinstance(label, str) and LABEL.match(label) for label in entry["labels"])
+            and isinstance(entry.get("item"), dict)
+            and not result_schema.validate(entry["item"], item_schema)
+            and entry["item"]["id"] == entry["id"]
+            and (entry.get("commit") is None or COMMIT.match(str(entry["commit"])))
+            and (entry.get("previous") is None or type(entry["previous"]) is int)
             for entry in plan["create"]
         )
     )
     if not valid:
         raise ReportError(f"the plan file is not in the {PLAN_FORMAT} format")
+    labels = [
+        *plan["labels_to_create"],
+        *(label for entry in plan["create"] for label in entry["labels"]),
+    ]
+    if not all(isinstance(label, str) and LABEL.match(label) for label in labels):
+        raise ReportError(f"the plan file is not in the {PLAN_FORMAT} format")
+    if any(looks_personal(label) for label in labels):
+        raise ReportError("a label in the plan file looks like personal data")
     keys = [(entry["tool"], entry["id"]) for entry in plan["create"]]
     if len(set(keys)) != len(keys):
         raise ReportError("the plan file lists the same item twice")
     for number, (entry, key) in enumerate(zip(plan["create"], keys, strict=True), 1):
-        # 案のファイルが書き換えられていないかを、作り方の決まりで確かめる。
-        if (
-            marker_key(entry["body"]) != key
-            or entry["title"] != title_for(key[0], {"id": key[1]})
-            or notifies(entry["body"])
-        ):
+        body = body_for(key, entry["item"], entry.get("commit"), entry.get("previous"))
+        if entry["body"] != body or entry["title"] != title_for(key[0], entry["item"]):
             raise ReportError(f"entry {number} of the plan file was not made by the plan command")
     return dict(plan)
 
 
-def file_digest(path: Path) -> str:
+def read_approved_plan(path: Path, digest: str) -> dict[str, Any]:
+    """案のファイルを 1 回だけ読み、承認されたハッシュと合うときだけ中身を返す。
+
+    ハッシュの計算と解析に同じバイト列を使う。間にファイルが差し替えられても、承認していない
+    中身を使わない。
+    """
     try:
-        return hashlib.sha256(path.read_bytes()).hexdigest()
+        data = path.read_bytes()
     except OSError as error:
         raise ReportError("cannot read the plan file") from error
+    if hashlib.sha256(data).hexdigest() != digest:
+        raise ReportError("the plan file changed after it was approved; plan again")
+    return parse_plan(data)
 
 
 def create_issues(plan: dict[str, Any], repository: str, gh: GhRunner) -> int:
@@ -590,11 +615,12 @@ def create_issues(plan: dict[str, Any], repository: str, gh: GhRunner) -> int:
         if blocking is not None:
             print(f"skipped entry {number}: already filed as #{blocking['number']}")
             continue
-        if looks_personal(entry["title"]) or looks_personal(entry["body"]):
+        body = body_for(key, entry["item"], entry.get("commit"), entry.get("previous"))
+        if any(looks_personal(text) for text in [entry["title"], body, *strings(entry["item"])]):
             print(f"skipped entry {number}: the text looks like personal data")
             failures += 1
             continue
-        payload = {"title": entry["title"], "body": entry["body"], "labels": entry["labels"]}
+        payload = {"title": entry["title"], "body": body, "labels": entry["labels"]}
         status, out = gh(
             ["api", "-X", "POST", f"repos/{repository}/issues", "--input", "-"],
             json.dumps(payload),
@@ -693,12 +719,16 @@ def recurring(history: Path, minimum: int) -> dict[str, Any]:
             skipped += 1
             continue
         tool = document["tool"]["name"]
-        # 同じ点検を 2 回記録しても、1 回と数える。
-        run = (tool, document.get("target", {}).get("commit", ""), document.get("generated_at", ""))
-        if run in runs:
-            duplicates += 1
-            continue
-        runs.add(run)
+        # 同じ点検を 2 回記録しても、1 回と数える。コミットも日時もない記録は見分けられない
+        # ので、別々の点検として数える。
+        commit = document.get("target", {}).get("commit", "")
+        generated_at = document.get("generated_at", "")
+        if commit or generated_at:
+            run = (tool, commit, generated_at)
+            if run in runs:
+                duplicates += 1
+                continue
+            runs.add(run)
         failed = {item["id"]: item for item in document["items"] if item["status"] == "fail"}
         for item_id, item in failed.items():
             entry = counts.setdefault(
@@ -744,8 +774,10 @@ def digest_arg(value: str) -> str:
 
 
 def label_arg(value: str) -> str:
-    if not LABEL.match(value):
-        raise argparse.ArgumentTypeError("a label is 1 to 50 characters without commas")
+    if not LABEL.match(value) or looks_personal(value):
+        raise argparse.ArgumentTypeError(
+            "a label is 1 to 50 characters without commas or personal data"
+        )
     return value
 
 
@@ -836,14 +868,13 @@ def main(argv: list[str] | None = None, gh: GhRunner = run_gh) -> int:
                 args.min_severity,
                 args.include_unknown,
             )
-            write_json(args.output, plan, "plan file")
+            digest = write_json(args.output, plan, "plan file")
             print_plan(plan)
-            print(f"plan sha256: {file_digest(args.output)}")
+            print(f"plan sha256: {digest}")
             return 0
         if args.command == "create":
-            if file_digest(args.plan) != args.sha256:
-                raise ReportError("the plan file changed after it was approved; plan again")
-            return 1 if create_issues(load_plan(args.plan), args.repo, gh) else 0
+            plan_document = read_approved_plan(args.plan, args.sha256)
+            return 1 if create_issues(plan_document, args.repo, gh) else 0
         if args.command == "record":
             print(f"recorded {record(args.result, args.into)}")
             return 0

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 from typing import Any
@@ -123,7 +124,15 @@ def marker_body(tool: str, item_id: str) -> str:
 def create(tmp_path: Path, gh: Any, repo: str = REPO, digest: str | None = None) -> int:
     path = tmp_path / "plan.json"
     return report.main(
-        ["create", str(path), "--repo", repo, "--sha256", digest or report.file_digest(path)], gh
+        [
+            "create",
+            str(path),
+            "--repo",
+            repo,
+            "--sha256",
+            digest or hashlib.sha256(path.read_bytes()).hexdigest(),
+        ],
+        gh,
     )
 
 
@@ -451,7 +460,11 @@ def test_create_refuses_a_plan_edited_to_hold_personal_data(
     plan(tmp_path, [result], FakeGh())
     path = tmp_path / "plan.json"
     document = json.loads(path.read_text())
-    document["create"][0]["body"] += f"\ncontact `{PERSONAL_EMAIL}`\n"
+    # 項目のデータと表示用の本文を、そろえて書き換える (plan の確認を通らなかった値を想定)。
+    entry = document["create"][0]
+    entry["item"]["summary"] = f"contact {PERSONAL_EMAIL}"
+    key = (entry["tool"], entry["id"])
+    entry["body"] = report.body_for(key, entry["item"], entry["commit"], entry["previous"])
     path.write_text(json.dumps(document))
     gh = FakeGh(labels=["shipkeep", "needs-triage"])
 
@@ -472,6 +485,7 @@ def test_create_refuses_a_plan_edited_to_hold_personal_data(
         {"format": "other"},
         {"create": [{"tool": "t", "id": "i", "title": "x", "body": "y", "labels": ["a,b"]}]},
         {"labels_to_create": [5]},
+        {"labels_to_create": ["someone" + "@" + "mail.example.net"]},
     ],
 )
 def test_create_rejects_a_malformed_plan(tmp_path: Path, change: dict[str, Any]) -> None:
@@ -717,11 +731,12 @@ def test_record_without_a_commit_and_write_errors(tmp_path: Path) -> None:
         report.dismiss(blocker / "dismissed.json", "t", "i", "reason", None)
 
 
-def test_a_bad_label_is_rejected(tmp_path: Path) -> None:
+@pytest.mark.parametrize("label", ["a,b", "someone" + "@" + "mail.example.net"])
+def test_a_bad_label_is_rejected(tmp_path: Path, label: str) -> None:
     result = write_result(tmp_path, [item("license")])
     with pytest.raises(SystemExit) as exit_info:
         report.main(
-            ["plan", str(result), "--repo", REPO, "--output", "x", "--label", "a,b"], FakeGh()
+            ["plan", str(result), "--repo", REPO, "--output", "x", "--label", label], FakeGh()
         )
     assert exit_info.value.code == 2
 
@@ -804,6 +819,9 @@ def test_blocked_items_are_shown_by_position_not_by_id(
     _, document = plan(tmp_path, [result], FakeGh())
 
     assert {"result": 1, "item": 2, "reason": "blocked_personal_data"} in document["skipped"]
+    # 同じ項目を 2 回渡しても、止めた項目は 1 件。
+    _, twice = plan(tmp_path, [result, result], FakeGh())
+    assert [e["reason"] for e in twice["skipped"]].count("blocked_personal_data") == 1
     assert PERSONAL_EMAIL not in json.dumps(document)
     assert PERSONAL_EMAIL not in capsys.readouterr().out
 
@@ -813,9 +831,17 @@ def test_blocked_items_are_shown_by_position_not_by_id(
     [
         lambda d: d["create"].append(dict(d["create"][0])),
         lambda d: d["create"][0].update(body=d["create"][0]["body"] + "\nping @someone\n"),
-        lambda d: d["create"][0].update(body=d["create"][0]["body"] + "\nsee other/repo#1\n"),
+        lambda d: d["create"][0].update(body=d["create"][0]["body"] + "\n\\`@someone`\n"),
+        lambda d: d["create"][0].update(
+            body=d["create"][0]["body"] + "\n[x](https://github.com/o/r/issues/1)\n"
+        ),
         lambda d: d["create"][0].update(title="[shipkeep] something else"),
         lambda d: d["create"][0].update(body="no marker\n"),
+        lambda d: d["create"][0].update(id="other"),
+        lambda d: d["create"][0]["item"].update(status="maybe"),
+        lambda d: d["create"][0].update(commit="not-a-commit"),
+        lambda d: d["create"][0].update(previous="7"),
+        lambda d: d["create"][0].update(item=None),
     ],
 )
 def test_create_rejects_plans_not_made_by_the_plan_command(
@@ -834,9 +860,21 @@ def test_create_rejects_plans_not_made_by_the_plan_command(
     assert "plan file" in capsys.readouterr().err
 
 
-def test_mentions_inside_code_spans_are_allowed() -> None:
-    assert not report.notifies("marker\n`@someone` and ``other/repo#1``\n")
-    assert report.notifies("marker\nhello @someone\n")
+def test_create_posts_the_body_rebuilt_from_the_item(tmp_path: Path) -> None:
+    result = write_result(tmp_path, [item("license", summary="ping @someone and o/r#1")])
+    gh = FakeGh()
+    plan(tmp_path, [result], gh)
+
+    assert create(tmp_path, gh) == 0
+
+    (posted,) = gh.created()
+    assert "`ping @someone and o/r#1`" in posted["body"]
+
+
+def test_a_plan_file_that_is_not_utf8_json_is_rejected(tmp_path: Path) -> None:
+    path = tmp_path / "plan.json"
+    path.write_bytes(b"\xff\xfe")
+    assert create(tmp_path, FakeGh()) == 2
 
 
 @pytest.mark.parametrize(
@@ -931,3 +969,33 @@ def test_record_ignores_unreadable_files_in_the_history(tmp_path: Path) -> None:
     result = write_result(tmp_path, [item("license")])
 
     assert report.record(result, history).endswith("-aaaaaaa.json")
+
+
+def test_records_without_a_commit_or_date_count_separately(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    history = tmp_path / "history"
+    history.mkdir()
+    for number in range(2):
+        document = {
+            "format": "shipkeep-result/1",
+            "tool": {"name": "other"},
+            "items": [item("license"), item(f"extra{number}")],
+        }
+        (history / f"r{number}.json").write_text(json.dumps(document))
+
+    assert report.main(["recurring", str(history)]) == 0
+
+    document = json.loads(capsys.readouterr().out)
+    assert document["duplicates"] == 0
+    assert [e["id"] for e in document["recurring"]] == ["license"]
+
+
+def test_plan_prints_the_digest_of_the_file_it_wrote(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    result = write_result(tmp_path, [item("license")])
+    plan(tmp_path, [result], FakeGh())
+
+    digest = hashlib.sha256((tmp_path / "plan.json").read_bytes()).hexdigest()
+    assert f"plan sha256: {digest}" in capsys.readouterr().out
