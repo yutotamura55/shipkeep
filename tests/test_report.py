@@ -394,6 +394,14 @@ def test_code_span_handles_empty_and_backticks() -> None:
     assert report.code_span("a\nb") == "`a b`"
 
 
+def test_code_span_keeps_fences_short_enough_for_github() -> None:
+    # GitHub は 80 本を超える区切りをコードスパンとみなさない。中の並びを縮めて区切りを短く保つ。
+    span = report.code_span("`" * 80 + " @someone other/repo#1")
+    fence = span[: len(span) - len(span.lstrip("`"))]
+    assert len(fence) == report.MAX_BACKTICK_RUN + 1
+    assert span.endswith(fence)
+
+
 def test_long_titles_are_cut() -> None:
     title = report.title_for("tool", {"id": "x/" + "y" * 300})
     assert len(title) == report.MAX_TITLE_LENGTH
@@ -840,6 +848,9 @@ def test_blocked_items_are_shown_by_position_not_by_id(
         lambda d: d["create"][0].update(id="other"),
         lambda d: d["create"][0]["item"].update(status="maybe"),
         lambda d: d["create"][0].update(commit="not-a-commit"),
+        lambda d: d["create"][0].update(commit=1234567),
+        lambda d: d["create"][0].update(commit="a" * 40 + "\n"),
+        lambda d: d["create"][0].update(tool="\ud800"),
         lambda d: d["create"][0].update(previous="7"),
         lambda d: d["create"][0].update(item=None),
     ],

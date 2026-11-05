@@ -308,9 +308,16 @@ def item_texts(item: dict[str, Any]) -> list[str]:
 # --- 本文の組み立て -------------------------------------------------------------------------
 
 
+# コードスパンの区切りは中のバッククォートの並びより長くする。GitHub の Markdown (cmark-gfm) は
+# 80 本を超える区切りをコードスパンとして扱わないため、中の並びを先に 10 本までに縮める。
+MAX_BACKTICK_RUN = 10
+LONG_BACKTICK_RUN = re.compile("`{" + str(MAX_BACKTICK_RUN + 1) + ",}")
+
+
 def code_span(text: str) -> str:
     """Markdown のコードスパンにする。メンションやリンクを働かせず、値を書いたまま見せる。"""
     text = " ".join(str(text).split())
+    text = LONG_BACKTICK_RUN.sub("`" * MAX_BACKTICK_RUN, text)
     if not text:
         return "(empty)"
     longest = max((len(run) for run in re.findall(r"`+", text)), default=0)
@@ -529,7 +536,9 @@ def parse_plan(data: bytes) -> dict[str, Any]:
     """
     try:
         plan = json.loads(data.decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        for text in strings(plan):
+            text.encode("utf-8")
+    except (UnicodeError, json.JSONDecodeError) as error:
         raise ReportError(f"the plan file is not in the {PLAN_FORMAT} format") from error
     schema = result_schema.load_schema()
     item_schema = {"$ref": ITEM_SCHEMA_REF, "$defs": schema["$defs"]}
@@ -546,7 +555,10 @@ def parse_plan(data: bytes) -> dict[str, Any]:
             and isinstance(entry.get("item"), dict)
             and not result_schema.validate(entry["item"], item_schema)
             and entry["item"]["id"] == entry["id"]
-            and (entry.get("commit") is None or COMMIT.match(str(entry["commit"])))
+            and (
+                entry.get("commit") is None
+                or (isinstance(entry["commit"], str) and COMMIT.fullmatch(entry["commit"]))
+            )
             and (entry.get("previous") is None or type(entry["previous"]) is int)
             for entry in plan["create"]
         )
