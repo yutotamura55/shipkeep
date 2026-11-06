@@ -560,7 +560,6 @@ def test_dismiss_adds_replaces_and_validates(
 
     # 呼び名は否定を含まない「見送る項目」にする（#51。打ち消しても二重否定にならない）。
     assert "見送る項目として記録しました：t license" in capsys.readouterr().out
-    assert report.reason_text("dismissed") == "見送る項目として記録済み"
     document = json.loads(path.read_text())
     assert document["format"] == "shipkeep-dismissed/1"
     assert [(i["tool"], i["id"], i["reason"]) for i in document["items"]] == [
@@ -571,6 +570,11 @@ def test_dismiss_adds_replaces_and_validates(
     assert report.main([*args, "--reason", "  "]) == 2
     assert report.main([*args, "--reason", f"ask {PERSONAL_EMAIL}"]) == 2
     assert PERSONAL_EMAIL not in capsys.readouterr().err
+
+
+def test_reason_text_names_dismissed_items_with_the_new_term() -> None:
+    # 案の表示でも、記録した項目を「見送る項目」と呼ぶ（#51）。
+    assert report.reason_text("dismissed") == "見送る項目として記録済み"
 
 
 def test_a_broken_dismissed_file_is_rejected(tmp_path: Path) -> None:
