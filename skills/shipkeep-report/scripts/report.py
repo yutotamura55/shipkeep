@@ -811,8 +811,26 @@ def recurring(history: Path, minimum: int) -> dict[str, Any]:
 # --- コマンドライン -------------------------------------------------------------------------
 
 
+class JapaneseHelpFormatter(argparse.HelpFormatter):
+    """使い方の見出しを日本語にする。argparse の既定の見出しは英語のため。"""
+
+    def add_usage(
+        self, usage: str | None, actions: Any, groups: Any, prefix: str | None = None
+    ) -> None:
+        super().add_usage(usage, actions, groups, "使い方: " if prefix is None else prefix)
+
+
 class QuietArgumentParser(argparse.ArgumentParser):
     """引数の誤りを、使い方とともに終了コード 2 で知らせる。"""
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        # 引数の見出しと -h の説明を日本語にする。argparse の既定の文は英語のため。
+        kwargs["add_help"] = False
+        kwargs.setdefault("formatter_class", JapaneseHelpFormatter)
+        super().__init__(*args, **kwargs)
+        self._positionals.title = "位置引数"
+        self._optionals.title = "オプション"
+        self.add_argument("-h", "--help", action="help", help="この説明を表示して終わる")
 
     def error(self, message: str) -> NoReturn:
         self.print_usage(sys.stderr)
@@ -851,10 +869,10 @@ def build_parser() -> QuietArgumentParser:
     commands = parser.add_subparsers(dest="command", required=True)
 
     validate = commands.add_parser("validate", help="結果のファイルが形式に合うかを確かめる")
-    validate.add_argument("results", nargs="+", type=Path)
+    validate.add_argument("results", nargs="+", type=Path, help="確かめる結果のファイル")
 
     plan = commands.add_parser("plan", help="作る Issue の案を書く。何も変えない")
-    plan.add_argument("results", nargs="+", type=Path)
+    plan.add_argument("results", nargs="+", type=Path, help="Issue の案にする結果のファイル")
     plan.add_argument(
         "--repo", required=True, type=repository_arg, help="owner/name の形のリポジトリ"
     )
@@ -880,7 +898,7 @@ def build_parser() -> QuietArgumentParser:
     )
 
     create = commands.add_parser("create", help="案のラベルと Issue を作る")
-    create.add_argument("plan", type=Path)
+    create.add_argument("plan", type=Path, help="承認された案のファイル")
     create.add_argument(
         "--repo", required=True, type=repository_arg, help="owner/name の形のリポジトリ"
     )
@@ -892,21 +910,25 @@ def build_parser() -> QuietArgumentParser:
     )
 
     record_parser = commands.add_parser("record", help="結果を .shipkeep/history/ に写す")
-    record_parser.add_argument("result", type=Path)
+    record_parser.add_argument("result", type=Path, help="記録する結果のファイル")
     record_parser.add_argument("--into", required=True, type=Path, help="履歴のディレクトリ")
 
     dismiss_parser = commands.add_parser("dismiss", help="対応しない項目を記録する")
     dismiss_parser.add_argument(
         "--file", required=True, type=Path, help="dismissed.json のファイル"
     )
-    dismiss_parser.add_argument("--tool", required=True)
-    dismiss_parser.add_argument("--id", required=True, dest="item_id")
-    dismiss_parser.add_argument("--reason", required=True)
-    dismiss_parser.add_argument("--issue", type=int)
+    dismiss_parser.add_argument("--tool", required=True, help="項目を出した道具の名前")
+    dismiss_parser.add_argument("--id", required=True, dest="item_id", help="項目の ID")
+    dismiss_parser.add_argument("--reason", required=True, help="対応しない理由")
+    dismiss_parser.add_argument("--issue", type=int, help="判断を記録した Issue の番号")
 
     recurring_parser = commands.add_parser("recurring", help="何度も失敗した項目を挙げる")
-    recurring_parser.add_argument("history", type=Path)
-    recurring_parser.add_argument("--min-count", type=int, default=2)
+    recurring_parser.add_argument(
+        "history", type=Path, help="履歴のディレクトリ（.shipkeep/history）"
+    )
+    recurring_parser.add_argument(
+        "--min-count", type=int, default=2, help="挙げる項目の、最も少ない失敗の回数"
+    )
     return parser
 
 

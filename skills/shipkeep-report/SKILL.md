@@ -40,7 +40,9 @@ things: do them only after the user approves, and follow
    `references/result.schema.json`: one item per finding, a stable `id` (the
    check, then `/` and what it is about), `status` `fail` for a problem,
    `severity` for a fail, `confidence` from how the tool found it, and evidence
-   with locations only. Mask every secret and personal value. Then check it:
+   with locations only. Write `summary`, `note`, and `remediation` in Japanese:
+   they become the Issue title and body. Mask every secret and personal value.
+   Then check it:
 
    ```bash
    python3 <this skill's directory>/scripts/report.py validate <result.json>...

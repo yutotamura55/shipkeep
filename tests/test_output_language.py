@@ -140,10 +140,13 @@ def test_a_pass_row_without_tools_has_no_empty_parentheses() -> None:
     assert inventory.summary_for(row, "Python") == "Python のテストの道具がある"
 
 
-def test_the_copies_of_use_utf8_output_are_the_same() -> None:
+def test_the_copied_output_helpers_are_the_same() -> None:
     # skill は別々に導入されるので、同じ関数を各スクリプトに写して持つ。写しがずれないようにする。
-    sources = {inspect.getsource(module.use_utf8_output) for module in MODULES}
-    assert len(sources) == 1
+    for name in ("use_utf8_output", "JapaneseHelpFormatter"):
+        sources = {inspect.getsource(getattr(module, name)) for module in MODULES}
+        assert len(sources) == 1, name
+    inits = {inspect.getsource(module.QuietArgumentParser.__init__) for module in MODULES}
+    assert len(inits) == 1
 
 
 @pytest.mark.parametrize("script", SCRIPTS, ids=lambda p: p.name)
@@ -161,3 +164,45 @@ def test_running_as_a_script_switches_the_output_to_utf8(
     assert exit_info.value.code == 0
     stdout.flush()
     assert any(not char.isascii() for char in stdout.buffer.getvalue().decode("utf-8"))
+
+
+ENGLISH_HELP = ("usage:", "positional arguments", "options:", "show this help message")
+
+
+@pytest.mark.parametrize("module", MODULES, ids=lambda m: m.__name__)
+def test_help_has_no_english_headings(
+    module: ModuleType, capsys: pytest.CaptureFixture[str]
+) -> None:
+    with pytest.raises(SystemExit):
+        module.main(["--help"])
+
+    out = capsys.readouterr().out
+    assert out.startswith("使い方: ")
+    assert not [phrase for phrase in ENGLISH_HELP if phrase in out]
+
+
+@pytest.mark.parametrize(
+    "command", ["validate", "plan", "create", "record", "dismiss", "recurring"]
+)
+def test_report_subcommand_help_has_no_english_headings(
+    command: str, capsys: pytest.CaptureFixture[str]
+) -> None:
+    with pytest.raises(SystemExit):
+        report.main([command, "--help"])
+
+    out = capsys.readouterr().out
+    # プログラムの名前はテストの実行のしかたで変わるので、見出しとサブコマンドだけを確かめる。
+    first_line = out.splitlines()[0]
+    assert first_line.startswith("使い方: ")
+    assert f" {command} " in first_line
+    assert not [phrase for phrase in ENGLISH_HELP if phrase in out]
+
+
+def test_argument_errors_show_a_japanese_usage(capsys: pytest.CaptureFixture[str]) -> None:
+    with pytest.raises(SystemExit) as exit_info:
+        report.main(["plan"])
+
+    assert exit_info.value.code == 2
+    err = capsys.readouterr().err
+    assert err.startswith("使い方: ")
+    assert "エラー：引数が正しくありません" in err

@@ -48,5 +48,5 @@ skip_covered = true
 # scripts/check.sh の全体の実行で測った値を、小数第 2 位で切り捨てた値。
 # 丸めると、pytest-cov が下限に届かない (FAIL) と表示しながら成功する。
 # 下回ったら失敗にする。テストを足して上がったら、この値も上げる。
-fail_under = 99.02
+fail_under = 99.03
 precision = 2

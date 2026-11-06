@@ -194,8 +194,26 @@ def hotspots(root: Path, max_commits: int = 500, limit: int = 20) -> dict[str, A
     return {"schema": SCHEMA_VERSION, "commits_counted": commits, "files": files[:limit]}
 
 
+class JapaneseHelpFormatter(argparse.HelpFormatter):
+    """使い方の見出しを日本語にする。argparse の既定の見出しは英語のため。"""
+
+    def add_usage(
+        self, usage: str | None, actions: Any, groups: Any, prefix: str | None = None
+    ) -> None:
+        super().add_usage(usage, actions, groups, "使い方: " if prefix is None else prefix)
+
+
 class QuietArgumentParser(argparse.ArgumentParser):
     """引数の誤りを、使い方とともに終了コード 2 で知らせる。"""
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        # 引数の見出しと -h の説明を日本語にする。argparse の既定の文は英語のため。
+        kwargs["add_help"] = False
+        kwargs.setdefault("formatter_class", JapaneseHelpFormatter)
+        super().__init__(*args, **kwargs)
+        self._positionals.title = "位置引数"
+        self._optionals.title = "オプション"
+        self.add_argument("-h", "--help", action="help", help="この説明を表示して終わる")
 
     def error(self, message: str) -> NoReturn:
         # argparse の文は、渡された値 (誤って渡したパスなど) をそのまま含むため出さない。

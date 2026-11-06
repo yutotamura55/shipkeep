@@ -550,8 +550,8 @@ REPOSITORY_FIXES = {
         "（references/common.md の Dependencies）"
     ),
     "diff_coverage": (
-        "Cobertura 形式のカバレッジの報告を書き出し、CI で既定のブランチとの差分に diff-cover を"
-        "実行する（references/common.md の Coverage）"
+        "Cobertura 形式のカバレッジの報告を書き出し、CI でプルリクエストのベースブランチとの差分に "
+        "diff-cover を実行する（references/common.md の Coverage）"
     ),
 }
 CODEQL_FIX = (
@@ -859,8 +859,26 @@ def printable(value: Any) -> Any:
     return value
 
 
+class JapaneseHelpFormatter(argparse.HelpFormatter):
+    """使い方の見出しを日本語にする。argparse の既定の見出しは英語のため。"""
+
+    def add_usage(
+        self, usage: str | None, actions: Any, groups: Any, prefix: str | None = None
+    ) -> None:
+        super().add_usage(usage, actions, groups, "使い方: " if prefix is None else prefix)
+
+
 class QuietArgumentParser(argparse.ArgumentParser):
     """引数の誤りを、使い方とともに終了コード 2 で知らせる。"""
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        # 引数の見出しと -h の説明を日本語にする。argparse の既定の文は英語のため。
+        kwargs["add_help"] = False
+        kwargs.setdefault("formatter_class", JapaneseHelpFormatter)
+        super().__init__(*args, **kwargs)
+        self._positionals.title = "位置引数"
+        self._optionals.title = "オプション"
+        self.add_argument("-h", "--help", action="help", help="この説明を表示して終わる")
 
     def error(self, message: str) -> NoReturn:
         self.print_usage(sys.stderr)
