@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import argparse
+import io
 import json
 import os
 import shutil
@@ -44,6 +45,7 @@ EXCLUDED_DIRS = (
 COMMIT_MARK = "\x01"
 # 行数を数えるときに、1 回の git grep に渡すパスの数。引数の長さの上限を避ける。
 PATHS_PER_GREP = 200
+GIT_NOT_STARTED = "git を起動できません"
 
 
 class HotspotError(Exception):
@@ -57,7 +59,7 @@ def executable(name: str) -> str:
     """
     path = shutil.which(name)
     if path is None:
-        raise OSError(f"{name} is not on PATH")
+        raise OSError(f"{name} が PATH にありません")
     # PATH に相対のディレクトリや空の項目があると、which は相対パスや名前だけを返す。
     return os.path.abspath(path)
 
@@ -77,9 +79,9 @@ def git(root: Path, *args: str, allowed: tuple[int, ...] = (0,)) -> str:
             env=env,
         )
     except OSError as error:
-        raise HotspotError("git could not be started") from error
+        raise HotspotError(GIT_NOT_STARTED) from error
     if result.returncode not in allowed:
-        raise HotspotError(f"git {args[0]} failed")
+        raise HotspotError(f"git {args[0]} が失敗しました")
     # UTF-8 でないパスも元のバイト列に戻せるよう surrogateescape で読む。
     # subprocess は引数を同じ規則でバイト列に戻すため、パスをそのまま Git に渡せる。
     return result.stdout.decode("utf-8", errors="surrogateescape")
@@ -170,14 +172,16 @@ def hotspots(root: Path, max_commits: int = 500, limit: int = 20) -> dict[str, A
         top = Path(git(root, "rev-parse", "--show-toplevel").strip())
         git(top, "rev-parse", "--verify", "--quiet", "HEAD")
     except HotspotError as error:
-        if str(error) == "git could not be started":
+        if str(error) == GIT_NOT_STARTED:
             raise
-        raise HotspotError("the path is not inside a Git repository with commits") from error
+        raise HotspotError(
+            "指定したパスは、コミットのある Git のリポジトリの中にありません"
+        ) from error
     if partial_clone(top):
         # 欠けたオブジェクトを読むと Git が取りに行き、対象のリポジトリに書き込む。
         raise HotspotError(
-            "this is a partial clone; reading history could fetch objects into it. "
-            "Run the script on a full clone"
+            "部分的な clone（partial clone）です。履歴を読むと、欠けたオブジェクトを取りに行き、"
+            "このリポジトリに書き込むおそれがあります。完全な clone に対して実行してください"
         )
     counts, commits = change_counts(top, max_commits)
     candidates = sorted(p for p, n in counts.items() if n >= MIN_CHANGES and is_source(p))
@@ -190,13 +194,31 @@ def hotspots(root: Path, max_commits: int = 500, limit: int = 20) -> dict[str, A
     return {"schema": SCHEMA_VERSION, "commits_counted": commits, "files": files[:limit]}
 
 
+class JapaneseHelpFormatter(argparse.HelpFormatter):
+    """使い方の見出しを日本語にする。argparse の既定の見出しは英語のため。"""
+
+    def add_usage(
+        self, usage: str | None, actions: Any, groups: Any, prefix: str | None = None
+    ) -> None:
+        super().add_usage(usage, actions, groups, "使い方: " if prefix is None else prefix)
+
+
 class QuietArgumentParser(argparse.ArgumentParser):
     """引数の誤りを、使い方とともに終了コード 2 で知らせる。"""
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        # 引数の見出しと -h の説明を日本語にする。argparse の既定の文は英語のため。
+        kwargs["add_help"] = False
+        kwargs.setdefault("formatter_class", JapaneseHelpFormatter)
+        super().__init__(*args, **kwargs)
+        self._positionals.title = "位置引数"
+        self._optionals.title = "オプション"
+        self.add_argument("-h", "--help", action="help", help="この説明を表示して終わる")
 
     def error(self, message: str) -> NoReturn:
         # argparse の文は、渡された値 (誤って渡したパスなど) をそのまま含むため出さない。
         self.print_usage(sys.stderr)
-        print("error: invalid arguments; see --help", file=sys.stderr)
+        print("エラー：引数が正しくありません。--help で使い方を確かめてください", file=sys.stderr)
         raise SystemExit(2)
 
 
@@ -213,9 +235,8 @@ def to_result(output: dict[str, Any], commit: str | None) -> dict[str, Any]:
             "status": "info",
             "confidence": "confirmed",
             "summary": (
-                f"{row['path']}: {row['changes']} change(s) in the last "
-                f"{output['commits_counted']} commit(s), {row['lines']} line(s), "
-                f"score {row['score']}"
+                f"{row['path']}：直近の {output['commits_counted']} コミットで "
+                f"{row['changes']} 回変更、{row['lines']} 行、スコア {row['score']}"
             ),
             "evidence": [
                 {
@@ -249,29 +270,40 @@ def head_commit(root: Path) -> str | None:
         return None
 
 
+def use_utf8_output() -> None:
+    """標準出力と標準エラーを UTF-8 にする。
+
+    表示は日本語なので、端末やリダイレクト先の文字コード (Windows の cp1252 など) で書けずに
+    止まらないようにする。
+    """
+    for stream in (sys.stdout, sys.stderr):
+        if isinstance(stream, io.TextIOWrapper):
+            stream.reconfigure(encoding="utf-8")
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = QuietArgumentParser(
         description=(
-            "List source files that change often and are large (hotspots), "
-            "as refactoring candidates. Reads Git history only."
+            "よく変更され、大きいソースファイル（ホットスポット）を、リファクタリングの候補として"
+            "一覧にします。Git の履歴だけを読みます。"
         )
     )
-    parser.add_argument("repository", nargs="?", default=".", help="path inside the repository")
-    parser.add_argument("--max-commits", type=int, default=500, help="recent commits to count")
-    parser.add_argument("--limit", type=int, default=20, help="number of files to list")
+    parser.add_argument("repository", nargs="?", default=".", help="リポジトリの中のパス")
+    parser.add_argument("--max-commits", type=int, default=500, help="数える直近のコミットの数")
+    parser.add_argument("--limit", type=int, default=20, help="一覧にするファイルの数")
     parser.add_argument(
         "--format",
         choices=("files", "result"),
         default="files",
-        help="output shape: files (default) or the common shipkeep result format",
+        help="出力の形。files（既定）か、shipkeep の共通の結果の形式の result",
     )
     args = parser.parse_args(argv)
     if args.max_commits < 1 or args.limit < 1:
-        parser.error("--max-commits and --limit must be positive")
+        parser.error("--max-commits と --limit は 1 以上にしてください")
     try:
         result = hotspots(Path(args.repository), args.max_commits, args.limit)
     except HotspotError as error:
-        print(f"error: {error}", file=sys.stderr)
+        print(f"エラー：{error}", file=sys.stderr)
         return 2
     if args.format == "result":
         result = to_result(result, head_commit(Path(args.repository)))
@@ -280,4 +312,6 @@ def main(argv: list[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
+    # 取り込んだ側の出力の設定を変えないよう、スクリプトとして実行したときだけ切り替える。
+    use_utf8_output()
     raise SystemExit(main())

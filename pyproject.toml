@@ -11,6 +11,9 @@ target-version = "py310"
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "B", "UP", "SIM", "RUF", "S"]
+# スクリプトの表示は日本語で書く (#45)。日本語の文で使う全角の記号は、ASCII の記号と
+# 取り違えたものではないので、RUF001 から RUF003 で止めない。
+allowed-confusables = ["：", "（", "）"]
 
 [tool.ruff.lint.per-file-ignores]
 # S101：pytest は assert で結果を確かめるため、テストでは除く。
@@ -45,5 +48,5 @@ skip_covered = true
 # scripts/check.sh の全体の実行で測った値を、小数第 2 位で切り捨てた値。
 # 丸めると、pytest-cov が下限に届かない (FAIL) と表示しながら成功する。
 # 下回ったら失敗にする。テストを足して上がったら、この値も上げる。
-fail_under = 98.63
+fail_under = 99.03
 precision = 2

@@ -104,7 +104,7 @@ location, and your judgment. Then give the fixes, most urgent first.
 | `readme` | A non-empty README at the top level of HEAD | Write what the project is and how to use it |
 | `github_settings` | GitHub secret scanning and push protection on the `origin` repository | Turn them on in the repository's Settings → Advanced Security (called Code security in older GitHub pages) |
 | `security_policy` | A non-empty `SECURITY.md` at the top level, in `.github/`, or in `docs/` of HEAD, where GitHub looks for it | Write how to report a vulnerability, for example through GitHub's private reporting, without a personal email address |
-| `private_reporting` | GitHub private vulnerability reporting on the `origin` repository. Not applicable while the repository is private, because GitHub offers it only for public repositories | Turn it on in Settings → Advanced Security right after making the repository public |
+| `private_reporting` | GitHub private vulnerability reporting on the `origin` repository. Not applicable while the repository is private, because GitHub offers it only for public repositories | Turn it on in Settings → Advanced Security; for a private repository, right after making it public |
 | `dependabot_alerts` | GitHub Dependabot alerts on the `origin` repository | Turn them on in Settings → Advanced Security |
 | `workflow_token` | Whether the default `GITHUB_TOKEN` of GitHub Actions can only read, and cannot approve pull requests. Once public, pull requests from strangers run workflows | In Settings → Actions → General → Workflow permissions, choose "Read repository contents and packages permissions" and clear "Allow GitHub Actions to create and approve pull requests" |
 

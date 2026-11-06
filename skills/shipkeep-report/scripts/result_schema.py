@@ -87,9 +87,11 @@ def check_supported(schema: dict[str, Any], where: str = "#") -> None:
     """スキーマ全体を走査し、対応しない語や format があれば ValueError を送出する。"""
     unknown = set(schema) - ANNOTATIONS - ASSERTIONS - {"$defs"}
     if unknown:
-        raise ValueError(f"unsupported schema keywords at {where}: {sorted(unknown)}")
+        raise ValueError(
+            f"{where} に、対応していないスキーマのキーワードがあります：{sorted(unknown)}"
+        )
     if "format" in schema and schema["format"] not in SUPPORTED_FORMATS:
-        raise ValueError(f"unsupported format at {where}: {schema['format']}")
+        raise ValueError(f"{where} の format には対応していません：{schema['format']}")
     for key in ("properties", "$defs"):
         for name, sub in schema.get(key, {}).items():
             check_supported(sub, f"{where}/{key}/{name}")
@@ -111,12 +113,12 @@ def validate(document: Any, schema: dict[str, Any] | None = None) -> list[str]:
 
 def _resolve(ref: str, root: dict[str, Any]) -> dict[str, Any]:
     if not ref.startswith("#/"):
-        raise ValueError(f"unsupported $ref: {ref}")
+        raise ValueError(f"対応していない $ref です：{ref}")
     node: Any = root
     for part in ref[2:].split("/"):
         node = node[part]
     if not isinstance(node, dict):
-        raise ValueError(f"$ref does not point to a schema: {ref}")
+        raise ValueError(f"$ref がスキーマを指していません：{ref}")
     return node
 
 
@@ -139,31 +141,31 @@ def _check(
         if branch in schema:
             _check(value, schema[branch], root, where, errors)
     if "not" in schema and _valid(value, schema["not"], root):
-        errors.append(f"{where}: must not match the 'not' schema")
+        errors.append(f"{where}：not のスキーマに合ってはいけません")
     if "const" in schema and value != schema["const"]:
-        errors.append(f"{where}: must be {schema['const']!r}")
+        errors.append(f"{where}：{schema['const']!r} でなければなりません")
     if "enum" in schema and value not in schema["enum"]:
-        errors.append(f"{where}: must be one of {schema['enum']}")
+        errors.append(f"{where}：{schema['enum']} のどれかでなければなりません")
     if "type" in schema:
         expected = TYPES[schema["type"]]
         # bool は int の部分型なので、integer では除く。
         if not isinstance(value, expected) or (expected is int and isinstance(value, bool)):
-            errors.append(f"{where}: must be {schema['type']}")
+            errors.append(f"{where}：型が {schema['type']} でなければなりません")
             return
     if isinstance(value, str):
         if "pattern" in schema and not _search(schema["pattern"], value):
-            errors.append(f"{where}: does not match {schema['pattern']}")
+            errors.append(f"{where}：{schema['pattern']} に合いません")
         if "minLength" in schema and len(value) < schema["minLength"]:
-            errors.append(f"{where}: shorter than {schema['minLength']}")
+            errors.append(f"{where}：{schema['minLength']} 文字以上でなければなりません")
         if schema.get("format") == "date-time" and not _is_date_time(value):
-            errors.append(f"{where}: not an RFC 3339 date-time")
+            errors.append(f"{where}：RFC 3339 の日時ではありません")
     is_integer = isinstance(value, int) and not isinstance(value, bool)
     if is_integer and "minimum" in schema and value < schema["minimum"]:
-        errors.append(f"{where}: below {schema['minimum']}")
+        errors.append(f"{where}：{schema['minimum']} 以上でなければなりません")
     if isinstance(value, dict):
         for key in schema.get("required", []):
             if key not in value:
-                errors.append(f"{where}: missing {key}")
+                errors.append(f"{where}：{key} がありません")
         properties = schema.get("properties", {})
         for key, item in value.items():
             if key in properties:
@@ -171,7 +173,7 @@ def _check(
             elif isinstance(schema.get("additionalProperties"), dict):
                 _check(item, schema["additionalProperties"], root, f"{where}.{_name(key)}", errors)
             elif schema.get("additionalProperties") is False:
-                errors.append(f"{where}: unexpected property {_name(key)}")
+                errors.append(f"{where}：想定していないプロパティ {_name(key)} があります")
     if isinstance(value, list) and "items" in schema:
         for index, item in enumerate(value):
             _check(item, schema["items"], root, f"{where}[{index}]", errors)

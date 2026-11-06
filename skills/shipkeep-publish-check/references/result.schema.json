@@ -71,9 +71,9 @@
           "enum": ["confirmed", "likely", "possible"],
           "description": "confirmed: read from the file or setting. likely: matched by a pattern or a name. possible: a weak signal that needs the user's check."
         },
-        "summary": {"type": "string", "minLength": 1, "description": "One line, in English, without secrets or personal data."},
-        "note": {"type": "string", "description": "Why the status is unknown or not_applicable, or other context."},
-        "remediation": {"type": "string", "description": "How to fix, when the tool knows."},
+        "summary": {"type": "string", "minLength": 1, "description": "One line, in Japanese, without secrets or personal data."},
+        "note": {"type": "string", "description": "Why the status is unknown or not_applicable, or other context. In Japanese."},
+        "remediation": {"type": "string", "description": "How to fix, when the tool knows. In Japanese."},
         "evidence": {
           "type": "array",
           "items": {"$ref": "#/$defs/evidence"}

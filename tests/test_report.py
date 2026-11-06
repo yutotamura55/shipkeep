@@ -149,8 +149,8 @@ def test_validate_accepts_a_result_and_reports_a_broken_one(
     assert report.main(["validate", str(good), str(broken)]) == 1
 
     out = capsys.readouterr().out
-    assert "result 1: ok" in out
-    assert "result 2: $: missing tool" in out
+    assert "結果 1：形式に合っています" in out
+    assert "結果 2：$：tool がありません" in out
     assert str(tmp_path) not in out
 
 
@@ -162,7 +162,7 @@ def test_validate_reports_a_file_that_is_not_json(
 
     assert report.main(["validate", str(path)]) == 2
     err = capsys.readouterr().err
-    assert "result file 1 is not JSON" in err
+    assert "結果のファイル 1 が JSON ではありません" in err
     assert str(tmp_path) not in err
 
 
@@ -255,7 +255,7 @@ def test_plan_files_again_an_item_closed_as_completed_that_still_fails(tmp_path:
     _, document = plan(tmp_path, [result], gh)
 
     (entry,) = document["create"]
-    assert "Filed before as #9" in entry["body"]
+    assert "以前に #9 として作り" in entry["body"]
 
 
 def test_plan_blocks_an_item_with_personal_data(tmp_path: Path) -> None:
@@ -323,7 +323,7 @@ def test_plan_reports_gh_failures_without_details(
     code, _ = plan(tmp_path, [result], FakeGh(fail={"list"}))
 
     assert code == 2
-    assert "could not read the Issues with gh" in capsys.readouterr().err
+    assert "gh で Issue を読めませんでした" in capsys.readouterr().err
 
 
 def test_plan_rejects_a_result_that_breaks_the_format(
@@ -335,7 +335,7 @@ def test_plan_rejects_a_result_that_breaks_the_format(
     code, _ = plan(tmp_path, [broken], FakeGh())
 
     assert code == 2
-    assert "result file 1 does not match" in capsys.readouterr().err
+    assert "結果のファイル 1 が、shipkeep の結果の形式に合いません" in capsys.readouterr().err
 
 
 def test_plan_rejects_bad_arguments(tmp_path: Path) -> None:
@@ -380,16 +380,16 @@ def test_body_neutralizes_mentions_and_keeps_masked_values(tmp_path: Path) -> No
     assert "@" not in entry["title"]
     body = entry["body"]
     assert "`` ping @someone about `code` ``" in body
-    assert "- Scope: `repository`" in body
-    assert "commit `bbbbbbbbbbbb`" in body
-    assert "`a b.md` line 3" in body
-    assert "...and 6 more in the result file" in body
-    assert "### How to fix" in body
+    assert "- 範囲：`repository`" in body
+    assert "コミット `bbbbbbbbbbbb`" in body
+    assert "`a b.md` の 3 行目" in body
+    assert "ほかに 6 件が、結果のファイルにあります" in body
+    assert "### 直し方" in body
     assert body.startswith(report.marker(("shipkeep-publish-check", "readme/docs @team")))
 
 
 def test_code_span_handles_empty_and_backticks() -> None:
-    assert report.code_span("") == "(empty)"
+    assert report.code_span("") == "（空）"
     assert report.code_span("`x`") == "`` `x` ``"
     assert report.code_span("a\nb") == "`a b`"
 
@@ -403,9 +403,9 @@ def test_code_span_keeps_fences_short_enough_for_github() -> None:
 
 
 def test_long_titles_are_cut() -> None:
-    title = report.title_for("tool", {"id": "x/" + "y" * 300})
+    title = report.title_for({"id": "x/" + "y" * 300, "summary": "s"})
     assert len(title) == report.MAX_TITLE_LENGTH
-    assert title.endswith("...")
+    assert title.endswith("…")
 
 
 # --- create -----------------------------------------------------------------------------------
@@ -422,16 +422,16 @@ def test_create_makes_labels_and_issues_of_the_plan(
 
     assert sorted(gh.labels) == ["needs-triage", "shipkeep"]
     assert [p["title"] for p in gh.created()] == [
-        "[shipkeep] shipkeep-publish-check: license",
-        "[shipkeep] shipkeep-publish-check: readme",
+        "[shipkeep] summary of license（license）",
+        "[shipkeep] summary of readme（readme）",
     ]
     out = capsys.readouterr().out
-    assert "created #101" in out and "created #102" in out
+    assert "#101 を作りました" in out and "#102 を作りました" in out
 
     # 同じ案をもう一度作っても、重複しない。
     assert create(tmp_path, gh) == 0
     assert len(gh.created()) == 2
-    assert "already filed as #101" in capsys.readouterr().out
+    assert "#101 として作成済み" in capsys.readouterr().out
 
 
 def test_create_refuses_a_plan_for_another_repository(
@@ -441,7 +441,7 @@ def test_create_refuses_a_plan_for_another_repository(
     plan(tmp_path, [result], FakeGh())
 
     assert create(tmp_path, FakeGh(), repo="other/repo") == 2
-    assert "another repository" in capsys.readouterr().err
+    assert "別のリポジトリ" in capsys.readouterr().err
 
 
 def test_create_reports_failures(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
@@ -451,12 +451,15 @@ def test_create_reports_failures(tmp_path: Path, capsys: pytest.CaptureFixture[s
     # ラベルを作れなければ、Issue は 1 件も作らない。
     gh = FakeGh(fail={"create_issue", "create_label"})
     assert create(tmp_path, gh) == 1
-    assert "failed to create the label shipkeep; no Issue was created" in capsys.readouterr().err
+    assert (
+        "ラベル shipkeep を作れませんでした。Issue は 1 件も作っていません"
+        in capsys.readouterr().err
+    )
     assert gh.created() == []
 
     gh = FakeGh(labels=["Shipkeep", "NEEDS-TRIAGE"], fail={"create_issue"})
     assert create(tmp_path, gh) == 1
-    assert "failed to create the Issue of entry 1" in capsys.readouterr().err
+    assert "項目 1 の Issue を作れませんでした" in capsys.readouterr().err
     # ラベルは大文字小文字を区別せずに比べ、作り直さない。
     assert gh.labels == ["Shipkeep", "NEEDS-TRIAGE"]
 
@@ -473,17 +476,18 @@ def test_create_refuses_a_plan_edited_to_hold_personal_data(
     entry["item"]["summary"] = f"contact {PERSONAL_EMAIL}"
     key = (entry["tool"], entry["id"])
     entry["body"] = report.body_for(key, entry["item"], entry["commit"], entry["previous"])
+    entry["title"] = report.title_for(entry["item"])
     path.write_text(json.dumps(document))
     gh = FakeGh(labels=["shipkeep", "needs-triage"])
 
     # 承認の後にファイルが変わったので、承認したハッシュと合わない。
     assert create(tmp_path, gh, digest="0" * 64) == 2
-    assert "changed after it was approved" in capsys.readouterr().err
+    assert "承認の後に案のファイルが変わりました" in capsys.readouterr().err
     # 新しいハッシュで渡しても、個人情報に見える値があれば作らない。
     assert create(tmp_path, gh) == 1
     assert gh.created() == []
     out = capsys.readouterr().out
-    assert "skipped entry 1: the text looks like personal data" in out
+    assert "項目 1 は作りませんでした：個人情報に見える文字列があります" in out
     assert PERSONAL_EMAIL not in out
 
 
@@ -530,7 +534,7 @@ def test_record_writes_a_dated_file_without_overwriting(
         "2026-11-05-shipkeep-publish-check-aaaaaaa.json",
     ]
     captured = capsys.readouterr()
-    assert "already recorded" in captured.err
+    assert "記録済み" in captured.err
     assert str(tmp_path) not in captured.out + captured.err
 
 
@@ -633,7 +637,7 @@ def test_run_gh_runs_the_gh_on_path(tmp_path: Path, monkeypatch: pytest.MonkeyPa
 
 def test_parse_pages_handles_blank_text_and_rejects_non_lists() -> None:
     assert report.parse_pages("  \n") == []
-    with pytest.raises(report.ReportError, match="unexpected response"):
+    with pytest.raises(report.ReportError, match="想定と違う応答"):
         report.parse_pages('{"a": 1}')
 
 
@@ -649,14 +653,14 @@ def test_plan_reports_a_response_that_is_not_json(
     code = report.main(["plan", str(result), "--repo", REPO, "--output", str(output)], broken)
 
     assert code == 2
-    assert "unexpected response" in capsys.readouterr().err
+    assert "想定と違う応答" in capsys.readouterr().err
 
 
 def test_unreadable_files_are_reported_without_paths(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     assert report.main(["validate", str(tmp_path)]) == 2
-    assert "cannot read the result file 1" in capsys.readouterr().err
+    assert "結果のファイル 1 を読めません" in capsys.readouterr().err
 
     result = write_result(tmp_path, [item("license")])
     missing_dir = tmp_path / "missing" / "plan.json"
@@ -664,7 +668,7 @@ def test_unreadable_files_are_reported_without_paths(
         ["plan", str(result), "--repo", REPO, "--output", str(missing_dir)], FakeGh()
     )
     assert code == 2
-    assert "cannot write the plan file" in capsys.readouterr().err
+    assert "案のファイルに書き込めません" in capsys.readouterr().err
 
 
 def test_plan_allows_public_addresses_and_merges_duplicate_items(tmp_path: Path) -> None:
@@ -679,7 +683,7 @@ def test_plan_allows_public_addresses_and_merges_duplicate_items(tmp_path: Path)
     _, document = plan(tmp_path, [first, second], FakeGh())
 
     (entry,) = document["create"]
-    assert "`author_email` · context" in entry["body"]
+    assert "`author_email` · 行の内容" in entry["body"]
     assert "...and" not in entry["body"]
 
 
@@ -697,7 +701,7 @@ def test_body_without_optional_fields(tmp_path: Path) -> None:
     _, result = plan(tmp_path, [path], FakeGh())
 
     body = result["create"][0]["body"]
-    assert "- Status: fail\n" in body
+    assert "- 状態：fail\n" in body
     assert "Inspected commit" not in body
     assert "- `k`\n" in body
 
@@ -715,7 +719,7 @@ def test_create_reports_a_response_without_a_number(
         return gh(args, stdin)
 
     assert create(tmp_path, odd) == 1
-    assert "failed to create the Issue" in capsys.readouterr().err
+    assert "の Issue を作れませんでした" in capsys.readouterr().err
 
 
 def test_record_without_a_commit_and_write_errors(tmp_path: Path) -> None:
@@ -733,9 +737,9 @@ def test_record_without_a_commit_and_write_errors(tmp_path: Path) -> None:
     assert name.endswith("-other-tool-1.json")
     blocker = tmp_path / "blocker"
     blocker.write_text("x")
-    with pytest.raises(report.ReportError, match="history directory"):
+    with pytest.raises(report.ReportError, match="履歴のディレクトリ"):
         report.record(path, blocker / "history")
-    with pytest.raises(report.ReportError, match="dismissed file"):
+    with pytest.raises(report.ReportError, match="対応しない項目のファイル"):
         report.dismiss(blocker / "dismissed.json", "t", "i", "reason", None)
 
 
@@ -868,7 +872,7 @@ def test_create_rejects_plans_not_made_by_the_plan_command(
 
     assert create(tmp_path, gh) == 2
     assert gh.created() == []
-    assert "plan file" in capsys.readouterr().err
+    assert "案のファイル" in capsys.readouterr().err
 
 
 def test_create_posts_the_body_rebuilt_from_the_item(tmp_path: Path) -> None:
@@ -926,7 +930,7 @@ def test_result_metadata_with_personal_data_is_rejected(
     path.write_text(json.dumps(document))
 
     assert report.main(["record", str(path), "--into", str(tmp_path / "h")]) == 2
-    assert "outside its items" in capsys.readouterr().err
+    assert "項目の外に" in capsys.readouterr().err
 
 
 def test_invalid_unicode_is_reported_without_a_traceback(
@@ -939,7 +943,7 @@ def test_invalid_unicode_is_reported_without_a_traceback(
     )
 
     assert report.main(["record", str(path), "--into", str(tmp_path / "h")]) == 2
-    assert "not valid Unicode" in capsys.readouterr().err
+    assert "Unicode として正しくない" in capsys.readouterr().err
 
 
 def test_validate_hides_unexpected_property_names(
@@ -955,8 +959,8 @@ def test_validate_hides_unexpected_property_names(
     assert report.main(["validate", str(path)]) == 1
 
     out = capsys.readouterr().out
-    assert "unexpected property <property>" in out
-    assert "$.counts.<property>: below 0" in out
+    assert "想定していないプロパティ <property>" in out
+    assert "$.counts.<property>：0 以上でなければなりません" in out
     assert "alice" not in out
 
 
@@ -966,7 +970,7 @@ def test_create_reports_a_missing_plan_and_a_bad_digest(
     missing = tmp_path / "missing.json"
     args = ["create", str(missing), "--repo", REPO, "--sha256", "0" * 64]
     assert report.main(args, FakeGh()) == 2
-    assert "cannot read the plan file" in capsys.readouterr().err
+    assert "案のファイルを読めません" in capsys.readouterr().err
 
     with pytest.raises(SystemExit) as exit_info:
         report.main(["create", str(missing), "--repo", REPO, "--sha256", "xyz"], FakeGh())
@@ -1009,4 +1013,4 @@ def test_plan_prints_the_digest_of_the_file_it_wrote(
     plan(tmp_path, [result], FakeGh())
 
     digest = hashlib.sha256((tmp_path / "plan.json").read_bytes()).hexdigest()
-    assert f"plan sha256: {digest}" in capsys.readouterr().out
+    assert f"案の SHA-256：{digest}" in capsys.readouterr().out
