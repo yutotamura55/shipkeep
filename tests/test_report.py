@@ -558,6 +558,9 @@ def test_dismiss_adds_replaces_and_validates(
         == 0
     )
 
+    # 呼び名は否定を含まない「見送る項目」にする（#51。打ち消しても二重否定にならない）。
+    assert "見送る項目として記録しました：t license" in capsys.readouterr().out
+    assert report.reason_text("dismissed") == "見送る項目として記録済み"
     document = json.loads(path.read_text())
     assert document["format"] == "shipkeep-dismissed/1"
     assert [(i["tool"], i["id"], i["reason"]) for i in document["items"]] == [
@@ -702,6 +705,7 @@ def test_body_without_optional_fields(tmp_path: Path) -> None:
 
     body = result["create"][0]["body"]
     assert "- 状態：fail\n" in body
+    assert "この項目を見送る場合は、Issue を not planned として閉じ" in body
     assert "Inspected commit" not in body
     assert "- `k`\n" in body
 
@@ -739,7 +743,7 @@ def test_record_without_a_commit_and_write_errors(tmp_path: Path) -> None:
     blocker.write_text("x")
     with pytest.raises(report.ReportError, match="履歴のディレクトリ"):
         report.record(path, blocker / "history")
-    with pytest.raises(report.ReportError, match="対応しない項目のファイル"):
+    with pytest.raises(report.ReportError, match="見送る項目のファイル"):
         report.dismiss(blocker / "dismissed.json", "t", "i", "reason", None)
 
 
