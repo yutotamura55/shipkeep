@@ -194,7 +194,7 @@ def test_main_exits_with_2_outside_a_repository(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     assert inventory.main([str(tmp_path)]) == 2
-    assert "not inside a Git repository" in capsys.readouterr().err
+    assert "Git のリポジトリの中にありません" in capsys.readouterr().err
 
 
 def test_a_language_found_only_by_sources_is_marked(tmp_path: Path) -> None:
@@ -337,7 +337,7 @@ def test_main_exits_with_2_when_git_is_missing(
     monkeypatch.setattr("shutil.which", lambda name: None)
 
     assert inventory.main([str(tmp_path)]) == 2
-    assert "git could not be started" in capsys.readouterr().err
+    assert "git を起動できません" in capsys.readouterr().err
 
 
 def test_dependency_review_fails_when_workflows_lack_it(tmp_path: Path) -> None:
@@ -414,7 +414,7 @@ def test_missing_rules_or_baseline_is_not_a_failure(tmp_path: Path, aspect: str)
     found = row(inventory.inventory(tmp_path), "repository", aspect)
 
     assert found["status"] == "not_applicable"
-    assert "propose" in found["note"]
+    assert "提案" in found["note"]
 
 
 def test_a_declared_language_is_listed_before_any_file_exists(tmp_path: Path) -> None:

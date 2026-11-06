@@ -138,10 +138,10 @@ def test_the_default_output_is_unchanged(
 @pytest.mark.parametrize(
     ("document", "message"),
     [
-        ({"format": "shipkeep-result/1", "tool": {"name": "x"}}, "missing items"),
+        ({"format": "shipkeep-result/1", "tool": {"name": "x"}}, "items がありません"),
         (
             {"format": "shipkeep-result/2", "tool": {"name": "x"}, "items": []},
-            "must be 'shipkeep-result/1'",
+            "'shipkeep-result/1' でなければなりません",
         ),
         (
             {
@@ -149,7 +149,7 @@ def test_the_default_output_is_unchanged(
                 "tool": {"name": "x"},
                 "items": [{"id": "Bad Id", "check": "c", "status": "fail", "summary": "s"}],
             },
-            "does not match",
+            "に合いません",
         ),
         (
             {
@@ -157,7 +157,7 @@ def test_the_default_output_is_unchanged(
                 "tool": {"name": "x"},
                 "items": [{"id": "c", "check": "c", "status": "warn", "summary": "s"}],
             },
-            "must be one of",
+            "のどれかでなければなりません",
         ),
         (
             {
@@ -165,7 +165,7 @@ def test_the_default_output_is_unchanged(
                 "tool": {"name": "x"},
                 "items": [{"id": "c", "check": "c", "status": "pass", "summary": "s", "extra": 1}],
             },
-            "unexpected property extra",
+            "想定していないプロパティ extra",
         ),
         (
             {
@@ -174,7 +174,7 @@ def test_the_default_output_is_unchanged(
                 "items": [],
                 "counts": {"a": -1},
             },
-            "below 0",
+            "0 以上でなければなりません",
         ),
         (
             {
@@ -184,7 +184,7 @@ def test_the_default_output_is_unchanged(
                     {"id": "c", "check": "c", "status": "pass", "summary": "s", "severity": "low"}
                 ],
             },
-            "must not match",
+            "not のスキーマに合ってはいけません",
         ),
         (
             {
@@ -193,7 +193,7 @@ def test_the_default_output_is_unchanged(
                 "items": [],
                 "generated_at": "2026-11-04",
             },
-            "not an RFC 3339 date-time",
+            "RFC 3339 の日時ではありません",
         ),
         (
             {
@@ -202,7 +202,7 @@ def test_the_default_output_is_unchanged(
                 "items": [],
                 "generated_at": "2026-11-04T10:00:00",
             },
-            "not an RFC 3339 date-time",
+            "RFC 3339 の日時ではありません",
         ),
     ],
 )
@@ -286,7 +286,7 @@ def test_scan_result_reports_git_failures_with_a_fixed_message(
 
     assert scan.main([str(tmp_path), "--format", "result"]) == 2
     err = capsys.readouterr().err
-    assert "git failed while reading the repository" in err
+    assert "リポジトリを読む途中で git が失敗しました" in err
     assert str(tmp_path) not in err
 
 
@@ -294,14 +294,14 @@ def test_the_validator_refuses_schemas_it_does_not_understand() -> None:
     schema = {"type": "object", "properties": {"a": {"type": "string", "maxLength": 3}}}
     with pytest.raises(ValueError, match="maxLength"):
         validate({"a": "x"}, schema)
-    with pytest.raises(ValueError, match="unsupported format"):
+    with pytest.raises(ValueError, match="format には対応していません"):
         validate("x", {"type": "string", "format": "uri"})
 
 
 def test_the_validator_applies_constraints_next_to_a_ref() -> None:
     schema = {"$defs": {"n": {"type": "integer"}}, "$ref": "#/$defs/n", "minimum": 1}
     assert validate(1, schema) == []
-    assert validate(0, schema) == ["$: below 1"]
+    assert validate(0, schema) == ["$：1 以上でなければなりません"]
 
 
 @pytest.mark.parametrize(
@@ -316,28 +316,28 @@ def test_the_validator_accepts_rfc_3339_date_times_in_either_case(value: str) ->
 )
 def test_the_validator_rejects_impossible_date_times(value: str) -> None:
     assert validate(value, {"type": "string", "format": "date-time"}) == [
-        "$: not an RFC 3339 date-time"
+        "$：RFC 3339 の日時ではありません"
     ]
 
 
 def test_the_validator_reports_type_and_length_errors() -> None:
     schema = {"type": "object", "properties": {"a": {"type": "string", "minLength": 2}}}
-    assert validate({"a": 1}, schema) == ["$.a: must be string"]
-    assert validate({"a": "x"}, schema) == ["$.a: shorter than 2"]
+    assert validate({"a": 1}, schema) == ["$.a：型が string でなければなりません"]
+    assert validate({"a": "x"}, schema) == ["$.a：2 文字以上でなければなりません"]
 
 
 def test_the_validator_rejects_refs_it_cannot_follow() -> None:
-    with pytest.raises(ValueError, match="unsupported"):
+    with pytest.raises(ValueError, match="対応していない"):
         validate(1, {"$ref": "other.json#/x"})
     # 事前の走査は $defs の中身を確かめるので、配列を指す参照は required などで作る。
-    with pytest.raises(ValueError, match="does not point"):
+    with pytest.raises(ValueError, match="スキーマを指していません"):
         validate(1, {"required": ["a"], "$ref": "#/required"})
 
 
 def test_the_end_anchor_does_not_accept_a_trailing_newline() -> None:
     schema = {"type": "string", "pattern": "^[a-z]+$"}
     assert validate("readme", schema) == []
-    assert validate("readme\n", schema) == ["$: does not match ^[a-z]+$"]
+    assert validate("readme\n", schema) == ["$：^[a-z]+$ に合いません"]
 
 
 def test_patterns_without_an_end_anchor_match_anywhere() -> None:
@@ -360,9 +360,11 @@ def test_scan_remediations_match_the_skill_md_table() -> None:
         check_id = cells[0].strip("`")
         assert check_id not in rows, check_id
         rows[check_id] = cells[2].replace("**", "").replace("`", "")
+    # 表は英語、直し方は日本語なので、文ではなく検査の ID がそろっていることを確かめる。
     assert set(rows) == set(scan.REMEDIATIONS) == set(scan.SEVERITIES)
     for check_id, text in scan.REMEDIATIONS.items():
-        assert rows[check_id] == text, check_id
+        assert text.strip(), check_id
+        assert "`" not in text, check_id
 
 
 def test_scan_result_puts_the_remediation_on_failed_items(
@@ -389,7 +391,7 @@ def test_scan_result_explains_unknown_items(
     document = scan.to_result(output, None)
 
     fix = document["items"][0]["remediation"]
-    assert fix.startswith("The scan could not verify this")
+    assert fix.startswith("点検では確かめられなかった")
     assert scan.REMEDIATIONS[document["items"][0]["id"]] in fix
 
 
@@ -418,12 +420,12 @@ def test_repository_fixes_fit_each_aspect() -> None:
         assert text is not None
         return text
 
-    assert "from the check command" not in fix("check_command")
-    assert "from the check command" not in fix("ci")
+    assert "検査コマンドから" not in fix("check_command")
+    assert "検査コマンドから" not in fix("ci")
     assert "dependabot.yml" in fix("dependency_updates")
     assert "dependency graph" in fix("dependency_review")
     audit = fix("dependency_audit")
-    assert audit.index("own tool") < audit.index("OSV-Scanner")
+    assert audit.index("その言語の道具") < audit.index("OSV-Scanner")
 
 
 def test_security_lint_points_to_the_common_layer() -> None:
@@ -441,8 +443,9 @@ def test_recommendations_without_the_reference_file(
     assert inventory.recommendations("python.md") == {}
     fix = inventory.remediation({"aspect": "lint", "scope": "python", "status": "fail"})
     assert fix == (
-        "Use what references/python.md of shipkeep-quality-tools recommends for lint. "
-        "Check its current version, run it from the check command, and run that in CI"
+        "shipkeep-quality-tools の references/python.md が lint に勧める道具を使う。"
+        "入れるときに最新のバージョンを確かめる。"
+        "検査コマンドから実行し、そのコマンドを CI でも実行する"
     )
 
 
@@ -474,7 +477,7 @@ def test_inventory_result_puts_remediations_on_failed_and_unknown_items(
     items = {item["id"]: item for item in document["items"]}
     assert "pip-audit" in items["dependency_audit/python"]["remediation"]
     assert "references/python.md" in items["dependency_audit/python"]["remediation"]
-    assert "own tool" in items["dependency_audit/repository"]["remediation"]
+    assert "その言語の道具" in items["dependency_audit/repository"]["remediation"]
     assert "other-languages.md" in items["lint/go"]["remediation"]
     assert "Advanced Security" in items["codeql/repository"]["remediation"]
     assert "remediation" not in items["lint/python"]

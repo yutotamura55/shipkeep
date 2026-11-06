@@ -68,7 +68,7 @@ def test_scan_rejects_a_path_that_is_not_a_repository(
 
     assert scan.main([str(target)]) == 2
     captured = capsys.readouterr()
-    assert "not a Git repository" in captured.err
+    assert "Git のリポジトリではありません" in captured.err
     assert str(tmp_path) not in captured.err
 
 
@@ -81,7 +81,7 @@ def test_scan_reports_missing_git_without_a_traceback_or_path(
     assert scan.main([str(tmp_path)]) == 2
 
     captured = capsys.readouterr()
-    assert "cannot run git" in captured.err
+    assert "git を起動できません" in captured.err
     assert "Traceback" not in captured.err
     assert str(tmp_path) not in captured.err
 
@@ -105,7 +105,7 @@ def test_executable_raises_when_the_command_is_not_on_path(
 ) -> None:
     monkeypatch.setattr("shutil.which", lambda name: None)
 
-    with pytest.raises(OSError, match="not on PATH"):
+    with pytest.raises(OSError, match="PATH にありません"):
         scan.executable("git")
 
 
@@ -119,5 +119,5 @@ def test_main_exits_with_2_when_the_denylist_cannot_be_read(
     assert scan.main([str(tmp_path), "--denylist", str(missing)]) == 2
 
     err = capsys.readouterr().err
-    assert "cannot read the denylist file" in err
+    assert "禁止語のファイルを読めません" in err
     assert str(missing) not in err

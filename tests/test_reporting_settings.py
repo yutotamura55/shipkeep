@@ -219,7 +219,7 @@ def test_private_reporting_waits_for_a_private_repository_to_become_public(
     checks = github_checks(tmp_path, api)
 
     assert checks["private_reporting"]["status"] == "not_applicable"
-    assert "public" in checks["private_reporting"]["summary"]
+    assert "公開" in checks["private_reporting"]["summary"]
     assert f"{REPOSITORY}/private-vulnerability-reporting" not in api.requested
 
 

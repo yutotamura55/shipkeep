@@ -87,7 +87,7 @@ def test_main_exits_with_2_without_commits(
     GitRepo(tmp_path)
 
     assert hotspots.main([str(tmp_path)]) == 2
-    assert "with commits" in capsys.readouterr().err
+    assert "コミットのある" in capsys.readouterr().err
 
 
 def test_main_rejects_a_non_positive_limit(capsys: pytest.CaptureFixture[str]) -> None:
@@ -179,7 +179,7 @@ def test_main_exits_with_2_when_git_is_missing(
     monkeypatch.setattr("shutil.which", lambda name: None)
 
     assert hotspots.main([str(tmp_path)]) == 2
-    assert "git could not be started" in capsys.readouterr().err
+    assert "git を起動できません" in capsys.readouterr().err
 
 
 def test_executable_returns_an_absolute_path_for_a_relative_path_entry(

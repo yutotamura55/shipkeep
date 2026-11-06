@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import fnmatch
+import io
 import json
 import os
 import re
@@ -250,7 +251,7 @@ TEST_PATHSPECS = (
     ":(exclude,glob)**/*.spec.*",
 )
 
-HIDDEN_PATH = "(hidden: the path contains confidential text)"
+HIDDEN_PATH = "（パスに秘密にすべき文字列を含むため伏せた）"
 # Git が引用の中で使う、バックスラッシュに続く 1 文字の表記。
 C_ESCAPES = {
     ord("a"): b"\a",
@@ -272,7 +273,7 @@ def executable(name: str) -> str:
     """
     path = shutil.which(name)
     if path is None:
-        raise OSError(f"{name} is not on PATH")
+        raise OSError(f"{name} が PATH にありません")
     # PATH に相対のディレクトリや空の項目があると、which は相対パスや名前だけを返す。
     return os.path.abspath(path)
 
@@ -667,10 +668,10 @@ def check_history_coverage(root: Path) -> Check:
         return result(
             "history_coverage",
             "unknown",
-            "the local copy lacks part of the history; other history checks may miss problems",
+            "手元の複製に履歴の一部がない。ほかの履歴の検査が問題を見落とすおそれがある",
             findings,
         )
-    return result("history_coverage", "pass", "the local copy holds the full history")
+    return result("history_coverage", "pass", "手元の複製に履歴がすべてある")
 
 
 def check_commit_identity(root: Path) -> Check:
@@ -687,10 +688,12 @@ def check_commit_identity(root: Path) -> Check:
         return result(
             "commit_identity",
             "fail",
-            f"{commits} commit(s) record an address that is not a GitHub noreply address",
+            f"GitHub の noreply でないアドレスを記録したコミットが {commits} 件ある",
             findings,
         )
-    return result("commit_identity", "pass", "every commit uses a GitHub noreply address")
+    return result(
+        "commit_identity", "pass", "すべてのコミットが GitHub の noreply のアドレスを使っている"
+    )
 
 
 @dataclass
@@ -742,35 +745,37 @@ def check_history_content(root: Path, denylist: list[str] | None) -> list[Check]
         secrets_check = result(
             "history_secrets",
             "fail",
-            f"{len(found.secrets)} added line(s) look like secrets",
+            f"秘密情報に見える追加行が {len(found.secrets)} 件ある",
             found.secrets,
         )
     else:
         secrets_check = result(
-            "history_secrets", "pass", "no added line matches the built-in secret patterns"
+            "history_secrets", "pass", "組み込みの秘密情報のパターンに合う追加行はない"
         )
     if found.personal:
         personal_check = result(
             "history_personal_data",
             "fail",
-            f"{len(found.personal)} place(s) in the history contain personal data",
+            f"履歴の {len(found.personal)} か所に個人情報がある",
             found.personal,
         )
     else:
         personal_check = result(
-            "history_personal_data", "pass", "no personal address or local home path was found"
+            "history_personal_data",
+            "pass",
+            "個人のアドレスとローカルのホームディレクトリのパスは見つからなかった",
         )
     if denylist is None:
-        terms_check = result("denylist", "not_applicable", "no denylist was given")
+        terms_check = result("denylist", "not_applicable", "禁止語の一覧が指定されていない")
     elif found.terms:
         terms_check = result(
             "denylist",
             "fail",
-            f"{len(found.terms)} place(s) in the history contain a denylist term",
+            f"履歴の {len(found.terms)} か所に禁止語がある",
             found.terms,
         )
     else:
-        terms_check = result("denylist", "pass", "no denylist term appears in the history")
+        terms_check = result("denylist", "pass", "履歴に禁止語は現れない")
     return [secrets_check, personal_check, terms_check]
 
 
@@ -785,10 +790,10 @@ def check_sensitive_files(root: Path) -> Check:
         return result(
             "sensitive_files",
             "fail",
-            f"{len(findings)} file(s) that should not be published were committed",
+            f"公開してはいけないファイルが {len(findings)} 件コミットされている",
             findings,
         )
-    return result("sensitive_files", "pass", "no file that should not be published was committed")
+    return result("sensitive_files", "pass", "公開してはいけないファイルはコミットされていない")
 
 
 def tree_paths(root: Path, *options: str) -> list[str]:
@@ -902,7 +907,9 @@ def check_env_files(root: Path) -> Check:
     path_set = set(paths)
     targets = env_targets(root, paths)
     if not targets:
-        return result("env_files", "not_applicable", "the project does not read a local env file")
+        return result(
+            "env_files", "not_applicable", "プロジェクトはローカルの env ファイルを読まない"
+        )
     findings: list[Finding] = []
     for target, examples in sorted(targets.items()):
         if not is_ignored(root, path_set, target):
@@ -912,26 +919,30 @@ def check_env_files(root: Path) -> Check:
             findings.append({"kind": "env_example_missing", "file": target})
     if findings:
         return result(
-            "env_files", "fail", "local env files are not set up for publishing", findings
+            "env_files", "fail", "ローカルの env ファイルが公開に向けて整っていない", findings
         )
-    return result("env_files", "pass", "local env files are ignored and examples are committed")
+    return result(
+        "env_files",
+        "pass",
+        "ローカルの env ファイルは ignore され、例のファイルがコミットされている",
+    )
 
 
 def check_license(root: Path) -> Check:
     names = [name for name in tree_paths(root) if name.lower() in LICENSE_NAMES]
     if names:
-        return result("license", "pass", f"HEAD has a license file: {names[0]}")
-    return result("license", "fail", "HEAD has no license file at the top level")
+        return result("license", "pass", f"HEAD にライセンスのファイルがある：{names[0]}")
+    return result("license", "fail", "HEAD の最上位にライセンスのファイルがない")
 
 
 def check_readme(root: Path) -> Check:
     names = [name for name in tree_paths(root) if name.lower() in README_NAMES]
     for name in names:
         if git(root, "show", f"HEAD:{name}").strip():
-            return result("readme", "pass", f"HEAD has a README: {name}")
+            return result("readme", "pass", f"HEAD に README がある：{name}")
     if names:
-        return result("readme", "fail", f"the README at HEAD is empty: {names[0]}")
-    return result("readme", "fail", "HEAD has no README at the top level")
+        return result("readme", "fail", f"HEAD の README が空：{names[0]}")
+    return result("readme", "fail", "HEAD の最上位に README がない")
 
 
 def check_security_policy(root: Path) -> Check:
@@ -939,15 +950,13 @@ def check_security_policy(root: Path) -> Check:
     names = [name for name in tree_paths(root, "-r") if name.lower() in SECURITY_POLICY_PATHS]
     for name in names:
         if git(root, "show", f"HEAD:{name}").strip():
-            return result("security_policy", "pass", f"HEAD has a security policy: {name}")
+            return result("security_policy", "pass", f"HEAD にセキュリティポリシーがある：{name}")
     if names:
-        return result(
-            "security_policy", "fail", f"the security policy at HEAD is empty: {names[0]}"
-        )
+        return result("security_policy", "fail", f"HEAD のセキュリティポリシーが空：{names[0]}")
     return result(
         "security_policy",
         "fail",
-        "HEAD has no SECURITY.md at the top level, in .github/, or in docs/",
+        "HEAD の最上位、.github/、docs/ のどこにも SECURITY.md がない",
     )
 
 
@@ -992,26 +1001,24 @@ def check_github_settings(
     """origin の GitHub で秘密情報のスキャンと push protection が有効かを確かめる。"""
     repository = github_repository(root)
     if repository is None:
-        return result("github_settings", "not_applicable", "the origin remote is not on GitHub")
+        return result("github_settings", "not_applicable", "origin のリモートが GitHub にない")
     settings = fetch(repository)
     if settings is None:
-        return result("github_settings", "unknown", "the settings could not be read with gh")
+        return result("github_settings", "unknown", "gh で設定を読めなかった")
     features = (
         ("secret_scanning", "secret_scanning_disabled"),
         ("secret_scanning_push_protection", "push_protection_disabled"),
     )
     if any(not isinstance(settings.get(name), dict) for name, _ in features):
-        return result(
-            "github_settings", "unknown", "GitHub does not show the secret scanning settings"
-        )
+        return result("github_settings", "unknown", "GitHub が秘密情報のスキャンの設定を示さない")
     findings: list[Finding] = [
         {"kind": kind} for name, kind in features if settings[name].get("status") != "enabled"
     ]
     if findings:
         return result(
-            "github_settings", "fail", "secret scanning or push protection is off", findings
+            "github_settings", "fail", "秘密情報のスキャンか push protection が無効", findings
         )
-    return result("github_settings", "pass", "secret scanning and push protection are on")
+    return result("github_settings", "pass", "秘密情報のスキャンと push protection が有効")
 
 
 GhResponse = tuple[int, Any]
@@ -1058,16 +1065,20 @@ def readiness_results(status: str, summary: str) -> list[Check]:
 def check_private_reporting(repository: str, api: Callable[[str], GhResponse | None]) -> Check:
     response = api(f"repos/{repository}/private-vulnerability-reporting")
     if response is None or response[0] != 200 or not isinstance(response[1], dict):
-        return result("private_reporting", "unknown", "the setting could not be read with gh")
+        return result("private_reporting", "unknown", "gh で設定を読めなかった")
     enabled = response[1].get("enabled")
     if enabled is True:
-        return result("private_reporting", "pass", "private vulnerability reporting is on")
+        return result(
+            "private_reporting",
+            "pass",
+            "脆弱性の非公開の報告（private vulnerability reporting）が有効",
+        )
     if enabled is not False:
-        return result("private_reporting", "unknown", "GitHub did not show whether it is on")
+        return result("private_reporting", "unknown", "GitHub が有効かどうかを示さなかった")
     return result(
         "private_reporting",
         "fail",
-        "private vulnerability reporting is off",
+        "脆弱性の非公開の報告（private vulnerability reporting）が無効",
         [{"kind": "private_reporting_disabled"}],
     )
 
@@ -1077,21 +1088,21 @@ def check_dependabot_alerts(repository: str, api: Callable[[str], GhResponse | N
     # 権限を確かめているため。
     response = api(f"repos/{repository}/vulnerability-alerts")
     if response is not None and response[0] == 204:
-        return result("dependabot_alerts", "pass", "Dependabot alerts are on")
+        return result("dependabot_alerts", "pass", "Dependabot alerts が有効")
     if response is not None and response[0] == 404:
         return result(
             "dependabot_alerts",
             "fail",
-            "Dependabot alerts are off",
+            "Dependabot alerts が無効",
             [{"kind": "dependabot_alerts_disabled"}],
         )
-    return result("dependabot_alerts", "unknown", "the setting could not be read with gh")
+    return result("dependabot_alerts", "unknown", "gh で設定を読めなかった")
 
 
 def check_workflow_token(repository: str, api: Callable[[str], GhResponse | None]) -> Check:
     response = api(f"repos/{repository}/actions/permissions/workflow")
     if response is None or response[0] != 200 or not isinstance(response[1], dict):
-        return result("workflow_token", "unknown", "the setting could not be read with gh")
+        return result("workflow_token", "unknown", "gh で設定を読めなかった")
     settings = response[1]
     permissions = settings.get("default_workflow_permissions")
     can_approve = settings.get("can_approve_pull_request_reviews")
@@ -1102,12 +1113,12 @@ def check_workflow_token(repository: str, api: Callable[[str], GhResponse | None
         findings.append({"kind": "workflow_can_approve_reviews"})
     if findings:
         return result(
-            "workflow_token", "fail", "the default GITHUB_TOKEN can do more than read", findings
+            "workflow_token", "fail", "既定の GITHUB_TOKEN が読み取り以外もできる", findings
         )
     # 値がない、または型が違うときは、読み取りだけとも言えない。
     if permissions != "read" or can_approve is not False:
-        return result("workflow_token", "unknown", "GitHub did not show the default permissions")
-    return result("workflow_token", "pass", "the default GITHUB_TOKEN can only read")
+        return result("workflow_token", "unknown", "GitHub が既定の権限を示さなかった")
+    return result("workflow_token", "pass", "既定の GITHUB_TOKEN は読み取りだけができる")
 
 
 def check_github_readiness(
@@ -1121,29 +1132,31 @@ def check_github_readiness(
     """
     repository = github_repository(root)
     if repository is None:
-        return readiness_results("not_applicable", "the origin remote is not on GitHub")
+        return readiness_results("not_applicable", "origin のリモートが GitHub にない")
     response = api(f"repos/{repository}")
     if response is None or response[0] != 200 or not isinstance(response[1], dict):
-        return readiness_results("unknown", "the repository could not be read with gh")
+        return readiness_results("unknown", "gh でリポジトリを読めなかった")
     data = response[1]
     permissions = data.get("permissions")
     if not isinstance(permissions, dict) or permissions.get("admin") is not True:
         return readiness_results(
-            "unknown", "reading these settings needs admin access to the repository"
+            "unknown", "これらの設定を読むには、リポジトリの管理者の権限が要る"
         )
     visibility = data.get("private")
     if visibility is False:
         reporting = check_private_reporting(repository, api)
     elif visibility is not True:
         reporting = result(
-            "private_reporting", "unknown", "GitHub did not show whether the repository is public"
+            "private_reporting",
+            "unknown",
+            "GitHub がリポジトリを公開しているかどうかを示さなかった",
         )
     else:
         reporting = result(
             "private_reporting",
             "not_applicable",
-            "GitHub offers it only for public repositories; turn it on right after "
-            "making the repository public",
+            "GitHub はこの機能を公開リポジトリにだけ提供する。リポジトリを公開したら、"
+            "すぐに有効にする",
         )
     return [
         reporting,
@@ -1186,46 +1199,45 @@ SEVERITIES = {
     "readme": "low",
     "security_policy": "low",
 }
-# 共通の結果の形式で fail の項目に付ける直し方。SKILL.md の表の「How to fix」の列と同じ文
-# (太字とバッククォートの記号を除く。Issue の本文ではコードスパンの中に置かれるため)。
-# tests/test_result_format.py で表との一致を確かめる。
+# 共通の結果の形式で fail の項目に付ける直し方。SKILL.md の表の「How to fix」の列を日本語にした
+# 文 (SKILL.md は英語のまま)。バッククォートは使わない (Issue の本文ではコードスパンの中に
+# 置かれるため)。tests/test_result_format.py で、表と同じ検査の ID がそろっていることを確かめる。
 REMEDIATIONS = {
     "history_coverage": (
-        "Run git fetch --unshallow, or fetch all branches, then scan again. "
-        "Until then, treat passing history checks as unconfirmed"
+        "git fetch --unshallow を実行するか、すべてのブランチを fetch してから、もう一度点検する。"
+        "それまでは、pass になった履歴の検査を確定していないものとして扱う"
     ),
     "commit_identity": (
-        "Set the noreply address in Git, then rewrite the history with git filter-repo --mailmap"
+        "Git に noreply のアドレスを設定してから、git filter-repo --mailmap で履歴を書き換える"
     ),
     "history_secrets": (
-        "Revoke and replace the credential first: removing it from history does not make a "
-        "leaked key safe. Then remove it with git filter-repo"
+        "まず認証情報を無効にして取り替える。履歴から消しても、漏れた鍵は安全にならない。"
+        "その後で git filter-repo で取り除く"
     ),
     "history_personal_data": (
-        "Edit the files and rewrite the history, or accept it if the user decides the data "
-        "may be public"
+        "ファイルを直して履歴を書き換える。利用者が公開してよいと決めたときは、そのままにする"
     ),
-    "denylist": "Same as personal data; rename the branch or tag",
-    "sensitive_files": "Remove them from the history, and replace any credential they held",
-    "env_files": "Add the ignore rule and an example file with empty values",
-    "license": "Choose a license with the user; without one, others may not reuse the code",
-    "readme": "Write what the project is and how to use it",
+    "denylist": "個人情報と同じ。ブランチやタグの名前に含まれるときは、名前を変える",
+    "sensitive_files": "履歴から取り除く。ファイルに認証情報があったときは、それも取り替える",
+    "env_files": "ignore の規則と、値を空にした例のファイルを追加する",
+    "license": "利用者とライセンスを選ぶ。ライセンスがないと、ほかの人はコードを再利用できない",
+    "readme": "プロジェクトが何であり、どう使うのかを書く",
     "github_settings": (
-        "Turn them on in the repository's Settings → Advanced Security (called Code security "
-        "in older GitHub pages)"
+        "リポジトリの Settings → Advanced Security（古い画面では Code security）で有効にする"
     ),
     "security_policy": (
-        "Write how to report a vulnerability, for example through GitHub's private reporting, "
-        "without a personal email address"
+        "脆弱性の報告の仕方を書く。例えば GitHub の非公開の報告を案内し、個人のメールアドレスは"
+        "書かない"
     ),
     "private_reporting": (
-        "Turn it on in Settings → Advanced Security right after making the repository public"
+        "Settings → Advanced Security で有効にする。非公開のリポジトリでは、公開したらすぐに"
+        "有効にする"
     ),
-    "dependabot_alerts": "Turn them on in Settings → Advanced Security",
+    "dependabot_alerts": "Settings → Advanced Security で有効にする",
     "workflow_token": (
-        'In Settings → Actions → General → Workflow permissions, choose "Read repository '
-        'contents and packages permissions" and clear "Allow GitHub Actions to create and '
-        'approve pull requests"'
+        "Settings → Actions → General → Workflow permissions で「Read repository contents "
+        "and packages permissions」を選び、「Allow GitHub Actions to create and approve pull "
+        "requests」のチェックを外す"
     ),
 }
 # パターンの一致で見つける検査は likely、ファイルや設定を読む検査は confirmed。
@@ -1271,8 +1283,9 @@ def to_result(output: dict[str, Any], commit: str | None) -> dict[str, Any]:
             item["remediation"] = REMEDIATIONS[check["id"]]
         elif check["status"] == "unknown":
             item["remediation"] = (
-                "The scan could not verify this; check it by hand (settings need gh signed in "
-                f"with admin access). If it fails: {REMEDIATIONS[check['id']]}"
+                "点検では確かめられなかった。手で確かめる（設定を読むには、管理者の権限で gh に"
+                "サインインする必要がある）。fail だったときの直し方："
+                f"{REMEDIATIONS[check['id']]}"
             )
         items.append(item)
     result: dict[str, Any] = {
@@ -1311,12 +1324,12 @@ def scan(root: Path, denylist: list[str] | None = None) -> dict[str, Any]:
     if is_partial_clone(root):
         # 欠けたオブジェクトを読むと Git が取りに行き、対象のリポジトリに書き込む。
         raise ScanError(
-            "this is a partial clone; reading history could fetch objects into it. "
-            "Run the script on a full clone"
+            "部分的な clone（partial clone）です。履歴を読むと、欠けたオブジェクトを取りに行き、"
+            "このリポジトリに書き込むおそれがあります。完全な clone に対して実行してください"
         )
     if not has_commits(root):
         checks = [
-            result(check_id, "unknown", "the repository has no commits") for check_id in CHECK_IDS
+            result(check_id, "unknown", "リポジトリにコミットがない") for check_id in CHECK_IDS
         ]
     else:
         checks = [
@@ -1362,24 +1375,36 @@ class QuietArgumentParser(argparse.ArgumentParser):
 
     def error(self, message: str) -> NoReturn:
         self.print_usage(sys.stderr)
-        self.exit(2, "error: invalid arguments; run with --help\n")
+        self.exit(2, "エラー：引数が正しくありません。--help で使い方を確かめてください\n")
+
+
+def use_utf8_output() -> None:
+    """標準出力と標準エラーを UTF-8 にする。
+
+    表示は日本語なので、端末やリダイレクト先の文字コード (Windows の cp1252 など) で書けずに
+    止まらないようにする。
+    """
+    for stream in (sys.stdout, sys.stderr):
+        if isinstance(stream, io.TextIOWrapper):
+            stream.reconfigure(encoding="utf-8")
 
 
 def main(argv: list[str] | None = None) -> int:
+    use_utf8_output()
     parser = QuietArgumentParser(
-        description="Scan a Git repository for problems to fix before making it public."
+        description="Git のリポジトリに、公開する前に直すべき問題がないかを点検します。"
     )
-    parser.add_argument("root", type=Path, help="path to the repository to scan")
+    parser.add_argument("root", type=Path, help="点検するリポジトリのパス")
     parser.add_argument(
         "--denylist",
         type=Path,
-        help="file with one term per line that must not appear in the history",
+        help="履歴に現れてはいけない語を、1 行に 1 つ書いたファイル",
     )
     parser.add_argument(
         "--format",
         choices=("checks", "result"),
         default="checks",
-        help="output shape: checks (default) or the common shipkeep result format",
+        help="出力の形。checks（既定）か、shipkeep の共通の結果の形式の result",
     )
     args = parser.parse_args(argv)
     # エラーメッセージは固定文にする。例外のメッセージにはローカルパスが入ることがある。
@@ -1388,31 +1413,34 @@ def main(argv: list[str] | None = None) -> int:
         try:
             denylist = read_denylist(args.denylist)
         except UnicodeDecodeError:
-            print("the denylist file must be UTF-8 text", file=sys.stderr)
+            print("禁止語のファイルは UTF-8 のテキストにしてください", file=sys.stderr)
             return 2
         except OSError:
-            print("cannot read the denylist file", file=sys.stderr)
+            print("禁止語のファイルを読めません", file=sys.stderr)
             return 2
     root: Path = args.root
     try:
         is_repository = root.is_dir() and is_git_repository(root)
     except OSError:
-        print("cannot run git: install Git and make sure it is on PATH", file=sys.stderr)
+        print(
+            "git を起動できません。Git を入れ、PATH に通っているかを確かめてください",
+            file=sys.stderr,
+        )
         return 2
     if not is_repository:
-        print("not a Git repository: the given path", file=sys.stderr)
+        print("指定したパスは Git のリポジトリではありません", file=sys.stderr)
         return 2
     try:
         output = scan(root, denylist)
         if args.format == "result":
             output = to_result(output, head_commit(root))
     except ScanError as error:
-        print(f"error: {error}", file=sys.stderr)
+        print(f"エラー：{error}", file=sys.stderr)
         return 2
     except (subprocess.CalledProcessError, OSError, ValueError):
-        print("git failed while reading the repository", file=sys.stderr)
+        print("リポジトリを読む途中で git が失敗しました", file=sys.stderr)
         return 2
-    json.dump(output, sys.stdout, indent=2)
+    json.dump(output, sys.stdout, ensure_ascii=False, indent=2)
     sys.stdout.write("\n")
     return 0
 

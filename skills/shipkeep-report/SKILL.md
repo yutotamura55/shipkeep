@@ -77,7 +77,8 @@ things: do them only after the user approves, and follow
    the first line of the Issue body, counted only in Issues opened by the
    repository's owner, members, or collaborators, so that a stranger cannot hide
    an item by opening an Issue with a marker. Removing the label does not cause
-   a duplicate. The command ends with `plan sha256: <digest>` of the plan file.
+   a duplicate. The command ends with `案の SHA-256：<digest>`, the digest of the plan
+   file. The script prints its messages in Japanese.
 
 3. **Let the user approve.** Show the user the titles to create, the labels to
    create, the skipped items with their reasons, and the plan digest. Show a

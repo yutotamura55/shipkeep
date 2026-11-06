@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import io
 import json
 import os
 import re
@@ -41,6 +42,7 @@ DEFAULT_LIMIT = 3
 MAX_EVIDENCE_LINES = 20
 MAX_TITLE_LENGTH = 120
 FULLWIDTH_AT = "\uff20"
+FULLWIDTH_NUMBER_SIGN = "\uff03"
 REPOSITORY = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 LABEL = re.compile(r"^[^,\r\n]{1,50}$")
 # Issue の本文に埋める目印。ID には空白や記号が入りうるので、パーセントエンコードする。
@@ -98,7 +100,7 @@ def executable(name: str) -> str:
     """PATH にある実行ファイルの絶対パスを返す。見つからなければ ``OSError`` を送出する。"""
     path = shutil.which(name)
     if path is None:
-        raise OSError(f"{name} is not on PATH")
+        raise OSError(f"{name} が PATH にありません")
     # PATH に相対のディレクトリや空の項目があると、which は相対パスや名前だけを返す。
     return os.path.abspath(path)
 
@@ -142,15 +144,15 @@ def read_json(path: Path, what: str) -> Any:
     try:
         document = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, UnicodeDecodeError) as error:
-        raise ReportError(f"cannot read the {what}") from error
+        raise ReportError(f"{what}を読めません") from error
     except json.JSONDecodeError as error:
-        raise ReportError(f"the {what} is not JSON") from error
+        raise ReportError(f"{what}が JSON ではありません") from error
     # JSON の \ud800 のような対になっていないサロゲートは読めるが、UTF-8 で書けない。
     try:
         for text in strings(document):
             text.encode("utf-8")
     except UnicodeEncodeError as error:
-        raise ReportError(f"the {what} holds text that is not valid Unicode") from error
+        raise ReportError(f"{what}に、Unicode として正しくない文字列があります") from error
     return document
 
 
@@ -160,23 +162,23 @@ def write_json(path: Path, document: Any, what: str) -> str:
         data = (json.dumps(document, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
         path.write_bytes(data)
     except (OSError, UnicodeError) as error:
-        raise ReportError(f"cannot write the {what}") from error
+        raise ReportError(f"{what}に書き込めません") from error
     return hashlib.sha256(data).hexdigest()
 
 
 def load_result(path: Path, position: int) -> dict[str, Any]:
-    document = read_json(path, f"result file {position}")
+    document = read_json(path, f"結果のファイル {position} ")
     # スキーマは最上位を object とするので、validate() が通れば dict になる。型を絞るために並べる。
     if result_schema.validate(document) or not isinstance(document, dict):
         raise ReportError(
-            f"result file {position} does not match the shipkeep result format; "
-            "run the validate command for details"
+            f"結果のファイル {position} が、shipkeep の結果の形式に合いません。"
+            "詳しくは validate コマンドで確かめてください"
         )
     metadata = {key: value for key, value in document.items() if key != "items"}
     if any(looks_personal(text) for text in strings(metadata)):
         raise ReportError(
-            f"result file {position} has text outside its items that looks like personal "
-            "data; mask it first"
+            f"結果のファイル {position} の項目の外に、個人情報に見える文字列があります。"
+            "先に伏せてください"
         )
     return document
 
@@ -185,7 +187,7 @@ def load_dismissed(path: Path | None) -> dict[Key, dict[str, Any]]:
     """dismissed.json を読み、(tool, id) から項目への辞書を返す。ファイルがなければ空。"""
     if path is None or not path.exists():
         return {}
-    document = read_json(path, "dismissed file")
+    document = read_json(path, "対応しない項目のファイル")
     if not (
         isinstance(document, dict)
         and document.get("format") == DISMISSED_FORMAT
@@ -198,7 +200,7 @@ def load_dismissed(path: Path | None) -> dict[Key, dict[str, Any]]:
             for item in document["items"]
         )
     ):
-        raise ReportError(f"the dismissed file is not in the {DISMISSED_FORMAT} format")
+        raise ReportError(f"対応しない項目のファイルが {DISMISSED_FORMAT} の形式ではありません")
     return {(item["tool"], item["id"]): item for item in document["items"]}
 
 
@@ -214,7 +216,7 @@ def parse_pages(text: str) -> list[Any]:
             break
         page, index = decoder.raw_decode(text, index)
         if not isinstance(page, list):
-            raise ReportError("GitHub returned an unexpected response")
+            raise ReportError("GitHub から想定と違う応答が返りました")
         items.extend(page)
     return items
 
@@ -222,11 +224,13 @@ def parse_pages(text: str) -> list[Any]:
 def gh_list(gh: GhRunner, path: str, what: str) -> list[Any]:
     code, out = gh(["api", "--paginate", path], None)
     if code != 0:
-        raise ReportError(f"could not read the {what} with gh; check that gh is signed in")
+        raise ReportError(
+            f"gh で{what}を読めませんでした。gh にサインインしているかを確かめてください"
+        )
     try:
         return parse_pages(out)
     except json.JSONDecodeError as error:
-        raise ReportError("GitHub returned an unexpected response") from error
+        raise ReportError("GitHub から想定と違う応答が返りました") from error
 
 
 def existing_issues(gh: GhRunner, repository: str) -> dict[Key, list[dict[str, Any]]]:
@@ -234,7 +238,7 @@ def existing_issues(gh: GhRunner, repository: str) -> dict[Key, list[dict[str, A
 
     ラベルで絞らない。利用者がラベルを外しても、同じ項目の Issue を作り直さないため。
     """
-    issues = gh_list(gh, f"repos/{repository}/issues?state=all&per_page=100", "Issues")
+    issues = gh_list(gh, f"repos/{repository}/issues?state=all&per_page=100", " Issue ")
     found: dict[Key, list[dict[str, Any]]] = {}
     for issue in issues:
         if not isinstance(issue, dict) or "pull_request" in issue:
@@ -268,7 +272,7 @@ def marker_key(body: str) -> Key | None:
 
 
 def existing_labels(gh: GhRunner, repository: str) -> set[str]:
-    labels = gh_list(gh, f"repos/{repository}/labels?per_page=100", "labels")
+    labels = gh_list(gh, f"repos/{repository}/labels?per_page=100", "ラベル")
     # GitHub のラベルの名前は大文字小文字を区別しない。
     return {
         str(label["name"]).lower()
@@ -319,7 +323,7 @@ def code_span(text: str) -> str:
     text = " ".join(str(text).split())
     text = LONG_BACKTICK_RUN.sub("`" * MAX_BACKTICK_RUN, text)
     if not text:
-        return "(empty)"
+        return "（空）"
     longest = max((len(run) for run in re.findall(r"`+", text)), default=0)
     fence = "`" * (longest + 1)
     pad = " " if text.startswith("`") or text.endswith("`") else ""
@@ -331,26 +335,28 @@ def marker(key: Key) -> str:
     return f"<!-- shipkeep-item tool={quote(tool, safe='')} id={quote(item_id, safe='')} -->"
 
 
-def title_for(tool: str, item: dict[str, Any]) -> str:
-    # タイトルではコードスパンが使えない。@ を全角の @ (U+FF20) にし、メンションとして
-    # 読まれないようにする。
-    text = " ".join(f"[shipkeep] {tool}: {item['id']}".split()).replace("@", FULLWIDTH_AT)
+def title_for(item: dict[str, Any]) -> str:
+    # 要約を先に置き、何の Issue かを一覧で読めるようにする。道具の名前は本文に書く。
+    # タイトルではコードスパンが使えない。@ と # を全角 (U+FF20、U+FF03) にし、メンションや
+    # Issue への参照として読まれないようにする。
+    text = " ".join(f"[shipkeep] {item['summary']}（{item['id']}）".split())
+    text = text.replace("@", FULLWIDTH_AT).replace("#", FULLWIDTH_NUMBER_SIGN)
     if len(text) > MAX_TITLE_LENGTH:
-        text = text[: MAX_TITLE_LENGTH - 3] + "..."
+        text = text[: MAX_TITLE_LENGTH - 1] + "…"
     return text
 
 
 def evidence_line(evidence: dict[str, Any]) -> str:
     parts = [code_span(evidence["kind"])]
     if "commit" in evidence:
-        parts.append(f"commit {code_span(evidence['commit'][:12])}")
+        parts.append(f"コミット {code_span(evidence['commit'][:12])}")
     if "path" in evidence:
         place = code_span(evidence["path"])
         if "line" in evidence:
-            place += f" line {evidence['line']}"
+            place += f" の {evidence['line']} 行目"
         parts.append(place)
     if "context" in evidence:
-        parts.append(f"context {code_span(evidence['context'])}")
+        parts.append(f"行の内容 {code_span(evidence['context'])}")
     if "detail" in evidence:
         parts.append(code_span(evidence["detail"]))
     return "- " + " · ".join(parts)
@@ -360,43 +366,46 @@ def body_for(key: Key, item: dict[str, Any], commit: str | None, previous: int |
     tool, _ = key
     lines = [
         marker(key),
-        "shipkeep found an item that needs a decision.",
+        "shipkeep の点検で、対応を決める必要のある項目が見つかりました。",
         "",
-        f"- Tool: {code_span(tool)}",
-        f"- Check: {code_span(item['check'])}",
+        f"- 道具：{code_span(tool)}",
+        f"- 検査：{code_span(item['check'])}",
     ]
     if "scope" in item:
-        lines.append(f"- Scope: {code_span(item['scope'])}")
-    status = f"- Status: {item['status']}"
+        lines.append(f"- 範囲：{code_span(item['scope'])}")
+    status = f"- 状態：{item['status']}"
     if "severity" in item:
-        status += f" · Severity: {item['severity']}"
+        status += f" · 重大度：{item['severity']}"
     if "confidence" in item:
-        status += f" · Confidence: {item['confidence']}"
+        status += f" · 確度：{item['confidence']}"
     lines.append(status)
     if commit:
-        lines.append(f"- Inspected commit: {code_span(commit[:12])}")
+        lines.append(f"- 点検したコミット：{code_span(commit[:12])}")
     if previous is not None:
         lines.append(
-            f"- Filed before as #{previous} and closed as completed; "
-            "the latest inspection still reports it."
+            f"- 以前に #{previous} として作り、完了として閉じました。"
+            "最新の点検でも報告されています。"
         )
-    lines += ["", "### Summary", "", code_span(item["summary"])]
+    lines += ["", "### 要約", "", code_span(item["summary"])]
     evidence = item.get("evidence", [])
     if evidence:
-        lines += ["", "### Evidence", ""]
+        lines += ["", "### 根拠", ""]
         lines += [evidence_line(e) for e in evidence[:MAX_EVIDENCE_LINES]]
         if len(evidence) > MAX_EVIDENCE_LINES:
-            lines.append(f"- ...and {len(evidence) - MAX_EVIDENCE_LINES} more in the result file")
+            lines.append(
+                f"- ほかに {len(evidence) - MAX_EVIDENCE_LINES} 件が、結果のファイルにあります"
+            )
     if "note" in item:
-        lines += ["", "### Note", "", code_span(item["note"])]
+        lines += ["", "### 注記", "", code_span(item["note"])]
     if "remediation" in item:
-        lines += ["", "### How to fix", "", code_span(item["remediation"])]
+        lines += ["", "### 直し方", "", code_span(item["remediation"])]
     lines += [
         "",
         "---",
-        "Values that could be secrets or personal data are masked. "
-        "If this item will not be fixed, close this Issue as not planned, and record it "
-        "in `.shipkeep/dismissed.json` so that later inspections do not file it again.",
+        "秘密情報や個人情報にあたりうる値は伏せてあります。"
+        "この項目に対応しない場合は、Issue を not planned として閉じ、"
+        "`.shipkeep/dismissed.json` に記録してください。記録すると、後の点検でこの項目の Issue は"
+        "作られません。",
     ]
     return "\n".join(lines) + "\n"
 
@@ -486,7 +495,7 @@ def make_plan(
             create.append(
                 {
                     **entry,
-                    "title": title_for(key[0], item),
+                    "title": title_for(item),
                     # 表示のための写し。create は下の item・commit・previous から組み立て直す。
                     "body": body_for(key, item, commit, previous),
                     "labels": list(labels),
@@ -506,18 +515,18 @@ def make_plan(
 
 
 def print_plan(plan: dict[str, Any]) -> None:
-    print(f"Issues to create in {plan['repository']}: {len(plan['create'])}")
+    print(f"{plan['repository']} に作る Issue：{len(plan['create'])} 件")
     for entry in plan["create"]:
-        print(f"  create: {entry['title']}")
+        print(f"  作る：{entry['title']}")
     for label in plan["labels_to_create"]:
-        print(f"  label to create: {label}")
+        print(f"  作るラベル：{label}")
     for entry in plan["skipped"]:
-        issue = f" (#{entry['issue']})" if "issue" in entry else ""
+        issue = f"（#{entry['issue']}）" if "issue" in entry else ""
         if "tool" in entry:
             name = f"{entry['tool']} {entry['id']}"
         else:
-            name = f"result {entry['result']} item {entry['item']}"
-        print(f"  skip: {name}: {entry['reason']}{issue}")
+            name = f"結果 {entry['result']} の項目 {entry['item']}"
+        print(f"  作らない：{name}：{entry['reason']}{issue}")
 
 
 # --- create ---------------------------------------------------------------------------------
@@ -539,7 +548,7 @@ def parse_plan(data: bytes) -> dict[str, Any]:
         for text in strings(plan):
             text.encode("utf-8")
     except (UnicodeError, json.JSONDecodeError) as error:
-        raise ReportError(f"the plan file is not in the {PLAN_FORMAT} format") from error
+        raise ReportError(f"案のファイルが {PLAN_FORMAT} の形式ではありません") from error
     schema = result_schema.load_schema()
     item_schema = {"$ref": ITEM_SCHEMA_REF, "$defs": schema["$defs"]}
     valid = (
@@ -564,22 +573,24 @@ def parse_plan(data: bytes) -> dict[str, Any]:
         )
     )
     if not valid:
-        raise ReportError(f"the plan file is not in the {PLAN_FORMAT} format")
+        raise ReportError(f"案のファイルが {PLAN_FORMAT} の形式ではありません")
     labels = [
         *plan["labels_to_create"],
         *(label for entry in plan["create"] for label in entry["labels"]),
     ]
     if not all(isinstance(label, str) and LABEL.match(label) for label in labels):
-        raise ReportError(f"the plan file is not in the {PLAN_FORMAT} format")
+        raise ReportError(f"案のファイルが {PLAN_FORMAT} の形式ではありません")
     if any(looks_personal(label) for label in labels):
-        raise ReportError("a label in the plan file looks like personal data")
+        raise ReportError("案のファイルのラベルに、個人情報に見えるものがあります")
     keys = [(entry["tool"], entry["id"]) for entry in plan["create"]]
     if len(set(keys)) != len(keys):
-        raise ReportError("the plan file lists the same item twice")
+        raise ReportError("案のファイルに、同じ項目が 2 回あります")
     for number, (entry, key) in enumerate(zip(plan["create"], keys, strict=True), 1):
         body = body_for(key, entry["item"], entry.get("commit"), entry.get("previous"))
-        if entry["body"] != body or entry["title"] != title_for(key[0], entry["item"]):
-            raise ReportError(f"entry {number} of the plan file was not made by the plan command")
+        if entry["body"] != body or entry["title"] != title_for(entry["item"]):
+            raise ReportError(
+                f"案のファイルの項目 {number} は、plan コマンドが作ったものではありません"
+            )
     return dict(plan)
 
 
@@ -592,16 +603,16 @@ def read_approved_plan(path: Path, digest: str) -> dict[str, Any]:
     try:
         data = path.read_bytes()
     except OSError as error:
-        raise ReportError("cannot read the plan file") from error
+        raise ReportError("案のファイルを読めません") from error
     if hashlib.sha256(data).hexdigest() != digest:
-        raise ReportError("the plan file changed after it was approved; plan again")
+        raise ReportError("承認の後に案のファイルが変わりました。plan からやり直してください")
     return parse_plan(data)
 
 
 def create_issues(plan: dict[str, Any], repository: str, gh: GhRunner) -> int:
     """案のとおりにラベルと Issue を作り、失敗した数を返す。作る直前に重複を確かめ直す。"""
     if plan["repository"] != repository:
-        raise ReportError("the plan was made for another repository")
+        raise ReportError("この案は、別のリポジトリ向けに作られています")
     issues = existing_issues(gh, repository)
     present = existing_labels(gh, repository)
     for label in plan["labels_to_create"]:
@@ -609,11 +620,13 @@ def create_issues(plan: dict[str, Any], repository: str, gh: GhRunner) -> int:
             continue
         status, _ = gh(
             ["api", "-X", "POST", f"repos/{repository}/labels", "--input", "-"],
-            json.dumps({"name": label, "color": "ededed", "description": "Filed by shipkeep"}),
+            json.dumps({"name": label, "color": "ededed", "description": "shipkeep が作成"}),
         )
         if status != 0:
             # ラベルがないまま Issue を作ると、GitHub が別の色で作るか失敗する。ここで止める。
-            print(f"failed to create the label {label}; no Issue was created", file=sys.stderr)
+            print(
+                f"ラベル {label} を作れませんでした。Issue は 1 件も作っていません", file=sys.stderr
+            )
             return 1
         present.add(label.lower())
     failures = 0
@@ -625,11 +638,11 @@ def create_issues(plan: dict[str, Any], repository: str, gh: GhRunner) -> int:
             None,
         )
         if blocking is not None:
-            print(f"skipped entry {number}: already filed as #{blocking['number']}")
+            print(f"項目 {number} は作りませんでした：#{blocking['number']} として作成済みです")
             continue
         body = body_for(key, entry["item"], entry.get("commit"), entry.get("previous"))
         if any(looks_personal(text) for text in [entry["title"], body, *strings(entry["item"])]):
-            print(f"skipped entry {number}: the text looks like personal data")
+            print(f"項目 {number} は作りませんでした：個人情報に見える文字列があります")
             failures += 1
             continue
         payload = {"title": entry["title"], "body": body, "labels": entry["labels"]}
@@ -644,13 +657,13 @@ def create_issues(plan: dict[str, Any], repository: str, gh: GhRunner) -> int:
             except (json.JSONDecodeError, AttributeError):
                 created = None
         if created is None:
-            print(f"failed to create the Issue of entry {number}", file=sys.stderr)
+            print(f"項目 {number} の Issue を作れませんでした", file=sys.stderr)
             failures += 1
             continue
         issues.setdefault(key, []).append(
             {"number": created, "state": "open", "state_reason": None}
         )
-        print(f"created #{created}: {entry['title']}")
+        print(f"#{created} を作りました：{entry['title']}")
     return failures
 
 
@@ -665,7 +678,7 @@ def record(result_path: Path, history: Path) -> str:
     """結果を history に写し、書いたファイルの名前を返す。同じ結果が記録済みなら書かない。"""
     document = load_result(result_path, 1)
     if any(looks_personal(text) for text in strings(document)):
-        raise ReportError("the result contains text that looks like personal data; mask it first")
+        raise ReportError("結果に、個人情報に見える文字列があります。先に伏せてください")
     day = str(document.get("generated_at", ""))[:10] or date.today().isoformat()
     name = f"{safe_name(day)}-{safe_name(document['tool']['name'])}"
     commit = document.get("target", {}).get("commit")
@@ -675,28 +688,28 @@ def record(result_path: Path, history: Path) -> str:
         for existing in history.glob("*.json"):
             try:
                 if json.loads(existing.read_text(encoding="utf-8")) == document:
-                    raise ReportError("this result is already recorded")
+                    raise ReportError("この結果は記録済みです")
             except (OSError, UnicodeDecodeError, json.JSONDecodeError):
                 continue
     try:
         history.mkdir(parents=True, exist_ok=True)
     except OSError as error:
-        raise ReportError("cannot write to the history directory") from error
+        raise ReportError("履歴のディレクトリに書き込めません") from error
     candidate = history / f"{name}.json"
     number = 2
     while candidate.exists():
         candidate = history / f"{name}-{number}.json"
         number += 1
-    write_json(candidate, document, "history file")
+    write_json(candidate, document, "履歴のファイル")
     return candidate.name
 
 
 def dismiss(path: Path, tool: str, item_id: str, reason: str, issue: int | None) -> None:
     """dismissed.json に項目を書く。同じ (tool, id) があれば置き換える。"""
     if not reason.strip():
-        raise ReportError("give the reason for not fixing the item")
+        raise ReportError("対応しない理由を書いてください")
     if looks_personal(" ".join((tool, item_id, reason))):
-        raise ReportError("the text looks like personal data; write it without the value")
+        raise ReportError("個人情報に見える文字列があります。値を書かずに書き直してください")
     items = list(load_dismissed(path).values())
     items = [i for i in items if (i["tool"], i["id"]) != (tool, item_id)]
     entry: dict[str, Any] = {
@@ -713,8 +726,8 @@ def dismiss(path: Path, tool: str, item_id: str, reason: str, issue: int | None)
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
     except OSError as error:
-        raise ReportError("cannot write the dismissed file") from error
-    write_json(path, document, "dismissed file")
+        raise ReportError("対応しない項目のファイルに書き込めません") from error
+    write_json(path, document, "対応しない項目のファイル")
 
 
 def recurring(history: Path, minimum: int) -> dict[str, Any]:
@@ -769,26 +782,26 @@ class QuietArgumentParser(argparse.ArgumentParser):
     def error(self, message: str) -> NoReturn:
         self.print_usage(sys.stderr)
         # argparse の文は、渡された値 (誤って渡したパスなど) をそのまま含むため出さない。
-        print("error: invalid arguments; see --help", file=sys.stderr)
+        print("エラー：引数が正しくありません。--help で使い方を確かめてください", file=sys.stderr)
         raise SystemExit(2)
 
 
 def repository_arg(value: str) -> str:
     if not REPOSITORY.match(value):
-        raise argparse.ArgumentTypeError("use owner/name")
+        raise argparse.ArgumentTypeError("owner/name の形で指定してください")
     return value
 
 
 def digest_arg(value: str) -> str:
     if not re.fullmatch(r"[0-9a-f]{64}", value):
-        raise argparse.ArgumentTypeError("a SHA-256 digest in hex")
+        raise argparse.ArgumentTypeError("16 進数の SHA-256 を指定してください")
     return value
 
 
 def label_arg(value: str) -> str:
     if not LABEL.match(value) or looks_personal(value):
         raise argparse.ArgumentTypeError(
-            "a label is 1 to 50 characters without commas or personal data"
+            "ラベルは 1〜50 文字で、カンマと個人情報を含めないでください"
         )
     return value
 
@@ -796,77 +809,100 @@ def label_arg(value: str) -> str:
 def build_parser() -> QuietArgumentParser:
     parser = QuietArgumentParser(
         description=(
-            "Turn shipkeep results into a plan of GitHub Issues, create the Issues of an "
-            "approved plan, and keep the history and dismissed items in .shipkeep/."
+            "shipkeep の結果から GitHub の Issue の案を作り、承認された案の Issue を作ります。"
+            "点検の履歴と、対応しない項目を .shipkeep/ に残します。"
         )
     )
     commands = parser.add_subparsers(dest="command", required=True)
 
-    validate = commands.add_parser("validate", help="check result files against the format")
+    validate = commands.add_parser("validate", help="結果のファイルが形式に合うかを確かめる")
     validate.add_argument("results", nargs="+", type=Path)
 
-    plan = commands.add_parser("plan", help="write the Issues to create; changes nothing")
+    plan = commands.add_parser("plan", help="作る Issue の案を書く。何も変えない")
     plan.add_argument("results", nargs="+", type=Path)
-    plan.add_argument("--repo", required=True, type=repository_arg, help="owner/name")
-    plan.add_argument("--output", required=True, type=Path, help="where to write the plan")
-    plan.add_argument("--dismissed", type=Path, help="the .shipkeep/dismissed.json file")
-    plan.add_argument("--limit", type=int, default=DEFAULT_LIMIT, help="Issues per run")
     plan.add_argument(
-        "--min-severity", choices=tuple(SEVERITY_ORDER), default="medium", help="lowest severity"
+        "--repo", required=True, type=repository_arg, help="owner/name の形のリポジトリ"
+    )
+    plan.add_argument("--output", required=True, type=Path, help="案を書くファイル")
+    plan.add_argument("--dismissed", type=Path, help=".shipkeep/dismissed.json のファイル")
+    plan.add_argument("--limit", type=int, default=DEFAULT_LIMIT, help="1 回に作る Issue の数")
+    plan.add_argument(
+        "--min-severity",
+        choices=tuple(SEVERITY_ORDER),
+        default="medium",
+        help="対象にする最も低い重大度",
     )
     plan.add_argument(
-        "--include-unknown", action="store_true", help="also file checks that could not run"
+        "--include-unknown",
+        action="store_true",
+        help="確かめられなかった検査（unknown）も Issue にする",
     )
     plan.add_argument(
         "--label",
         action="append",
         type=label_arg,
-        help=f"label to add (repeatable); default: {', '.join(DEFAULT_LABELS)}",
+        help=f"付けるラベル（くり返し指定できる）。既定：{', '.join(DEFAULT_LABELS)}",
     )
 
-    create = commands.add_parser("create", help="create the labels and Issues of a plan")
+    create = commands.add_parser("create", help="案のラベルと Issue を作る")
     create.add_argument("plan", type=Path)
-    create.add_argument("--repo", required=True, type=repository_arg, help="owner/name")
+    create.add_argument(
+        "--repo", required=True, type=repository_arg, help="owner/name の形のリポジトリ"
+    )
     create.add_argument(
         "--sha256",
         required=True,
         type=digest_arg,
-        help="the plan digest that plan printed and the user approved",
+        help="plan が出し、利用者が承認した案の SHA-256",
     )
 
-    record_parser = commands.add_parser("record", help="copy a result into .shipkeep/history/")
+    record_parser = commands.add_parser("record", help="結果を .shipkeep/history/ に写す")
     record_parser.add_argument("result", type=Path)
-    record_parser.add_argument("--into", required=True, type=Path, help="the history directory")
+    record_parser.add_argument("--into", required=True, type=Path, help="履歴のディレクトリ")
 
-    dismiss_parser = commands.add_parser("dismiss", help="record an item that will not be fixed")
-    dismiss_parser.add_argument("--file", required=True, type=Path, help="dismissed.json")
+    dismiss_parser = commands.add_parser("dismiss", help="対応しない項目を記録する")
+    dismiss_parser.add_argument(
+        "--file", required=True, type=Path, help="dismissed.json のファイル"
+    )
     dismiss_parser.add_argument("--tool", required=True)
     dismiss_parser.add_argument("--id", required=True, dest="item_id")
     dismiss_parser.add_argument("--reason", required=True)
     dismiss_parser.add_argument("--issue", type=int)
 
-    recurring_parser = commands.add_parser("recurring", help="list items that failed repeatedly")
+    recurring_parser = commands.add_parser("recurring", help="何度も失敗した項目を挙げる")
     recurring_parser.add_argument("history", type=Path)
     recurring_parser.add_argument("--min-count", type=int, default=2)
     return parser
 
 
+def use_utf8_output() -> None:
+    """標準出力と標準エラーを UTF-8 にする。
+
+    表示は日本語なので、端末やリダイレクト先の文字コード (Windows の cp1252 など) で書けずに
+    止まらないようにする。
+    """
+    for stream in (sys.stdout, sys.stderr):
+        if isinstance(stream, io.TextIOWrapper):
+            stream.reconfigure(encoding="utf-8")
+
+
 def main(argv: list[str] | None = None, gh: GhRunner = run_gh) -> int:
+    use_utf8_output()
     args = build_parser().parse_args(argv)
     try:
         if args.command == "validate":
             failed = False
             for position, path in enumerate(args.results, 1):
-                errors = result_schema.validate(read_json(path, f"result file {position}"))
+                errors = result_schema.validate(read_json(path, f"結果のファイル {position} "))
                 for error in errors:
-                    print(f"result {position}: {error}")
+                    print(f"結果 {position}：{error}")
                 failed = failed or bool(errors)
                 if not errors:
-                    print(f"result {position}: ok")
+                    print(f"結果 {position}：形式に合っています")
             return 1 if failed else 0
         if args.command == "plan":
             if args.limit < 0:
-                raise ReportError("--limit must be 0 or more")
+                raise ReportError("--limit は 0 以上にしてください")
             results = [load_result(p, i) for i, p in enumerate(args.results, 1)]
             labels = tuple(args.label) if args.label else DEFAULT_LABELS
             plan = make_plan(
@@ -880,26 +916,26 @@ def main(argv: list[str] | None = None, gh: GhRunner = run_gh) -> int:
                 args.min_severity,
                 args.include_unknown,
             )
-            digest = write_json(args.output, plan, "plan file")
+            digest = write_json(args.output, plan, "案のファイル")
             print_plan(plan)
-            print(f"plan sha256: {digest}")
+            print(f"案の SHA-256：{digest}")
             return 0
         if args.command == "create":
             plan_document = read_approved_plan(args.plan, args.sha256)
             return 1 if create_issues(plan_document, args.repo, gh) else 0
         if args.command == "record":
-            print(f"recorded {record(args.result, args.into)}")
+            print(f"記録しました：{record(args.result, args.into)}")
             return 0
         if args.command == "dismiss":
             dismiss(args.file, args.tool, args.item_id, args.reason, args.issue)
-            print(f"dismissed {args.tool} {args.item_id}")
+            print(f"対応しない項目として記録しました：{args.tool} {args.item_id}")
             return 0
         if args.min_count < 1:
-            raise ReportError("--min-count must be 1 or more")
+            raise ReportError("--min-count は 1 以上にしてください")
         print(json.dumps(recurring(args.history, args.min_count), ensure_ascii=False, indent=2))
         return 0
     except ReportError as error:
-        print(f"error: {error}", file=sys.stderr)
+        print(f"エラー：{error}", file=sys.stderr)
         return 2
 
 

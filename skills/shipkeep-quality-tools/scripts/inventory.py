@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import fnmatch
+import io
 import json
 import os
 import re
@@ -333,15 +334,15 @@ REPOSITORY_ASPECTS: tuple[tuple[str, tuple[Tool, ...], bool], ...] = (
 # なくても不足と報告しない観点。問題の型が見つかったときや、既存の違反が多いときに提案する。
 OPTIONAL_ASPECTS: dict[str, str] = {
     "custom_rules": (
-        "no project-specific rule files; "
-        "propose one when an inspection finds a recurring type of problem"
+        "プロジェクト独自の規則のファイルがない。点検で同じ型の問題がくり返し見つかったときに"
+        "提案する"
     ),
-    "baseline": "no baseline file; propose one when a new rule fails on existing code",
+    "baseline": "ベースラインのファイルがない。新しい規則が既存のコードで失敗するときに提案する",
 }
 
 
 class InventoryError(Exception):
-    """調べられない理由を、利用者に見せる英語の文で持つ。"""
+    """調べられない理由を、利用者に見せる文で持つ。"""
 
 
 def matches(path: str, pattern: str) -> bool:
@@ -358,7 +359,7 @@ def executable(name: str) -> str:
     """
     path = shutil.which(name)
     if path is None:
-        raise OSError(f"{name} is not on PATH")
+        raise OSError(f"{name} が PATH にありません")
     # PATH に相対のディレクトリや空の項目があると、which は相対パスや名前だけを返す。
     return os.path.abspath(path)
 
@@ -385,9 +386,9 @@ def tracked_files(root: Path) -> tuple[Path, list[str]]:
         git = executable("git")
         code, top = run_git(git, root, "rev-parse", "--show-toplevel")
     except OSError as error:
-        raise InventoryError("git could not be started") from error
+        raise InventoryError("git を起動できません") from error
     if code != 0:
-        raise InventoryError("the path is not inside a Git repository")
+        raise InventoryError("指定したパスは Git のリポジトリの中にありません")
     top_path = Path(top.removesuffix("\n"))
     # ls-files は索引だけを読むが、sparse index を展開するときに木のオブジェクトを読む。
     # 欠けたオブジェクトを取りに行く部分的な clone は、読む前に止める。
@@ -400,12 +401,12 @@ def tracked_files(root: Path) -> tuple[Path, list[str]]:
     )
     if promisor.strip():
         raise InventoryError(
-            "this is a partial clone; reading it could fetch objects into it. "
-            "Run the script on a full clone"
+            "部分的な clone（partial clone）です。読むと、欠けたオブジェクトを取りに行き、"
+            "このリポジトリに書き込むおそれがあります。完全な clone に対して実行してください"
         )
     code, listing = run_git(git, top_path, "ls-files", "-z")
     if code != 0:
-        raise InventoryError("git ls-files failed")
+        raise InventoryError("git ls-files が失敗しました")
     names = listing.split("\0")
     return top_path, sorted(name for name in names if name and not is_vendored(name))
 
@@ -483,53 +484,81 @@ SECURITY_ASPECTS = {
 
 
 REFERENCES = Path(__file__).resolve().parents[1] / "references"
+# 要約と直し方に使う、観点の日本語の名前。
+ASPECT_NAMES = {
+    "format": "整形",
+    "lint": "lint",
+    "type_check": "型検査",
+    "security_lint": "セキュリティの lint",
+    "tests": "テスト",
+    "coverage": "カバレッジ",
+    "unused_code": "未使用のコードの検出",
+    "unused_dependencies": "未使用の依存の検出",
+    "dependency_audit": "依存の監査",
+    "check_command": "検査コマンド",
+    "ci": "CI",
+    "workflow_lint": "ワークフローの lint",
+    "workflow_security": "ワークフローのセキュリティ検査",
+    "sast": "静的解析（SAST）",
+    "codeql": "CodeQL",
+    "dependency_updates": "依存の更新",
+    "dependency_review": "依存の変更の確認（dependency review）",
+    "diff_coverage": "差分のカバレッジ",
+    "custom_rules": "プロジェクト独自の規則",
+    "baseline": "ベースライン",
+}
+# 言語を見つけた方法の言い方。
+DETECTED_BY = {
+    "manifest": "（プロジェクトのファイルで検出）",
+    "sources": "（ソースファイルだけで検出）",
+    "declared": "（--language で指定）",
+}
+JAPANESE_PUNCTUATION = set("、。：（）「」")
 # リポジトリ全体の観点の直し方。観点ごとにすることが違う (コマンド、workflow、設定) ので、
 # 1 つの定型文にせず観点ごとに書く。推奨は references/common.md に合わせる。
 REPOSITORY_FIXES = {
     "check_command": (
-        "Add one command that runs every check (such as scripts/check.sh), document it in the "
-        "README or AGENTS.md, and run it in CI (references/common.md, One check command)"
+        "すべての検査を実行する 1 つのコマンド（scripts/check.sh など）を追加する。README か "
+        "AGENTS.md に書き、CI でも実行する（references/common.md の One check command）"
     ),
     "ci": (
-        "Add a CI workflow that runs the check command on every pull request, with actions "
-        "pinned to commit SHAs and minimal permissions (references/common.md)"
+        "プルリクエストごとに検査コマンドを実行する CI のワークフローを追加する。action は"
+        "コミットの SHA で固定し、permissions は最小にする（references/common.md）"
     ),
     "workflow_lint": (
-        "Run actionlint on the workflows from the check command (references/common.md)"
+        "検査コマンドから、ワークフローに actionlint を実行する（references/common.md）"
     ),
     "workflow_security": (
-        "Run zizmor on the workflows from the check command (references/common.md)"
+        "検査コマンドから、ワークフローに zizmor を実行する（references/common.md）"
     ),
     "sast": (
-        "Run Semgrep CE or Opengrep from the check command, fetching the rules at run time "
-        "instead of copying them (references/common.md)"
+        "検査コマンドから Semgrep CE か Opengrep を実行する。規則は写さず、実行のたびに取得する"
+        "（references/common.md）"
     ),
     "dependency_audit": (
-        "Audit the dependencies of each language with its own tool (for example pip-audit or "
-        "npm audit) from the check command; use OSV-Scanner for languages without one or for a "
-        "single report across languages (references/common.md, Dependencies)"
+        "各言語の依存を、その言語の道具（pip-audit や npm audit など）で検査コマンドから監査する。"
+        "その道具がない言語や、言語をまとめて 1 つの報告にしたいときは OSV-Scanner を使う"
+        "（references/common.md の Dependencies）"
     ),
     "dependency_updates": (
-        "Add .github/dependabot.yml (or Renovate) with minor and patch updates grouped, and "
-        "turn on Dependabot security updates in the repository settings (references/common.md)"
+        ".github/dependabot.yml（か Renovate）を追加し、minor と patch の更新をまとめる。"
+        "リポジトリの設定で Dependabot security updates も有効にする（references/common.md）"
     ),
     "dependency_review": (
-        "Turn on the dependency graph, then add actions/dependency-review-action to a pull "
-        "request workflow, pinned to a commit SHA (references/common.md, Dependencies)"
+        "dependency graph を有効にしてから、プルリクエストのワークフローに "
+        "actions/dependency-review-action をコミットの SHA で固定して追加する"
+        "（references/common.md の Dependencies）"
     ),
     "diff_coverage": (
-        "Write a Cobertura-style coverage report and run diff-cover against the base branch in "
-        "CI (references/common.md, Coverage)"
+        "Cobertura 形式のカバレッジの報告を書き出し、CI で既定のブランチとの差分に diff-cover を"
+        "実行する（references/common.md の Coverage）"
     ),
 }
 CODEQL_FIX = (
-    "Check whether CodeQL default setup is on in Settings → Advanced Security, and turn it on "
-    "where the repository can use code scanning (references/common.md)"
+    "Settings → Advanced Security で CodeQL の default setup が有効かを確かめる。リポジトリが "
+    "code scanning を使えるなら有効にする（references/common.md）"
 )
-RESEARCH_FIX = (
-    "Research the tools for this language as references/other-languages.md describes, and "
-    "cite the sources"
-)
+RESEARCH_FIX = "references/other-languages.md の手順でこの言語の道具を調べ、出典を示す"
 
 
 def recommendations(reference: str) -> dict[str, str]:
@@ -576,19 +605,58 @@ def remediation(row: Row, reference: bool = True) -> str | None:
     language = next((lang for lang in REFERENCED_LANGUAGES if lang.id == scope), None)
     if language is None:
         return RESEARCH_FIX
-    where = f"references/{language.reference} of shipkeep-quality-tools"
+    where = f"shipkeep-quality-tools の references/{language.reference}"
     recommended = recommendations(language.reference).get(aspect)
-    text = f"Use what {where} recommends for {aspect}"
-    text += f": {recommended}." if recommended else "."
+    # 推奨の文は参照の資料 (英語) から引用する。
+    text = join_words(where, "が", ASPECT_NAMES[aspect], "に勧める道具を使う")
+    text += f"：「{recommended}」。" if recommended else "。"
     if recommended and "common layer" in recommended:
-        text += " For tools from the common layer, see references/common.md."
-    return text + " Check its current version, run it from the check command, and run that in CI"
+        text += "共通の層（common layer）の道具は references/common.md を見る。"
+    return (
+        text + "入れるときに最新のバージョンを確かめる。検査コマンドから実行し、そのコマンドを "
+        "CI でも実行する"
+    )
+
+
+def join_words(*parts: str) -> str:
+    """文の部品をつなぐ。英数字と日本語の境目には空白を入れる (例: 「Python の lint」)。"""
+    text = ""
+    for part in parts:
+        if (
+            text
+            and part
+            and is_ascii_word(text[-1]) != is_ascii_word(part[0])
+            and text[-1] not in JAPANESE_PUNCTUATION
+            and part[0] not in JAPANESE_PUNCTUATION
+        ):
+            text += " "
+        text += part
+    return text
+
+
+def is_ascii_word(char: str) -> bool:
+    return char.isascii() and not char.isspace()
+
+
+def summary_for(row: Row, scope_name: str) -> str:
+    """観点の行の要約。何が足りないのか、何があるのかを読み取れる文にする。"""
+    subject = join_words(scope_name, "の", ASPECT_NAMES[row["aspect"]])
+    status = row["status"]
+    if status == "pass":
+        return join_words(subject, "の道具がある") + f"（{', '.join(row['tools'])}）"
+    if status == "fail":
+        return join_words(subject, "の道具が見つからない")
+    if status == "unknown":
+        return join_words(subject, "を判定できない")
+    return join_words(subject, "は対象外")
 
 
 def to_result(output: dict[str, Any], commit: str | None) -> dict[str, Any]:
     """inventory() の出力を shared/result.schema.json の形式にする。"""
     items: list[dict[str, Any]] = []
     references = {language["id"]: language["reference"] for language in output["languages"]}
+    scope_names = {language["id"]: language["name"] for language in output["languages"]}
+    scope_names["repository"] = "リポジトリ全体"
     for language in output["languages"]:
         items.append(
             {
@@ -597,8 +665,8 @@ def to_result(output: dict[str, Any], commit: str | None) -> dict[str, Any]:
                 "scope": language["id"],
                 "status": "info",
                 "confidence": "confirmed" if language["detected_by"] == "declared" else "likely",
-                "summary": f"{language['name']} detected by {language['detected_by']}"
-                + ("" if language["reference"] else "; no reference, research the tools"),
+                "summary": join_words(language["name"], DETECTED_BY[language["detected_by"]])
+                + ("" if language["reference"] else "。参照の資料がないため、道具を調べる"),
                 "evidence": [{"kind": "file", "path": path} for path in language["evidence"]],
             }
         )
@@ -609,8 +677,8 @@ def to_result(output: dict[str, Any], commit: str | None) -> dict[str, Any]:
                 "check": "unrecognized_extension",
                 "status": "info",
                 "confidence": "likely",
-                "summary": f"source files with the extension .{extension} belong to a language "
-                "the inventory does not know; decide the language and research its tools",
+                "summary": join_words("拡張子", f".{extension}", "のソースファイルは、")
+                + "inventory が知らない言語のもの。言語を決め、その道具を調べる",
             }
         )
     for row in output["aspects"]:
@@ -620,8 +688,7 @@ def to_result(output: dict[str, Any], commit: str | None) -> dict[str, Any]:
             "scope": row["scope"],
             "status": row["status"],
             "confidence": "likely",
-            "summary": f"{row['aspect']} for {row['scope']}: {row['status']}"
-            + (f" ({', '.join(row['tools'])})" if row["tools"] else ""),
+            "summary": summary_for(row, scope_names.get(row["scope"], row["scope"])),
             "evidence": [{"kind": "file", "path": path} for path in row["evidence"]],
         }
         if row["tools"]:
@@ -731,7 +798,7 @@ def inventory(root: Path, declared: tuple[str, ...] = ()) -> dict[str, Any]:
                     "status": "unknown",
                     "tools": [],
                     "evidence": [],
-                    "note": "no reference for this language; research the tools",
+                    "note": "この言語の参照の資料がない。道具を調べる",
                 }
             )
 
@@ -748,7 +815,7 @@ def inventory(root: Path, declared: tuple[str, ...] = ()) -> dict[str, Any]:
                     "status": "not_applicable",
                     "tools": [],
                     "evidence": [],
-                    "note": "no GitHub Actions workflow",
+                    "note": "GitHub Actions のワークフローがない",
                 }
             )
         else:
@@ -759,7 +826,9 @@ def inventory(root: Path, declared: tuple[str, ...] = ()) -> dict[str, Any]:
             if aspect == "codeql" and row["status"] == "fail":
                 # CodeQL の default setup はリポジトリの設定で、ファイルに現れない。
                 row["status"] = "unknown"
-                row["note"] = "no CodeQL workflow; check the default setup in GitHub settings"
+                row["note"] = (
+                    "CodeQL のワークフローがない。GitHub の設定で default setup を確かめる"
+                )
         rows.append(row)
 
     counts = {s: 0 for s in ("pass", "fail", "unknown", "not_applicable")}
@@ -795,18 +864,30 @@ class QuietArgumentParser(argparse.ArgumentParser):
     def error(self, message: str) -> NoReturn:
         self.print_usage(sys.stderr)
         # argparse の文は、渡された値 (誤って渡したパスなど) をそのまま含むため出さない。
-        print("error: invalid arguments; see --help", file=sys.stderr)
+        print("エラー：引数が正しくありません。--help で使い方を確かめてください", file=sys.stderr)
         raise SystemExit(2)
 
 
+def use_utf8_output() -> None:
+    """標準出力と標準エラーを UTF-8 にする。
+
+    表示は日本語なので、端末やリダイレクト先の文字コード (Windows の cp1252 など) で書けずに
+    止まらないようにする。
+    """
+    for stream in (sys.stdout, sys.stderr):
+        if isinstance(stream, io.TextIOWrapper):
+            stream.reconfigure(encoding="utf-8")
+
+
 def main(argv: list[str] | None = None) -> int:
+    use_utf8_output()
     parser = QuietArgumentParser(
         description=(
-            "List the quality tools a repository already has and the ones it lacks. "
-            "Reads tracked files only and never changes the repository."
+            "リポジトリにすでにある品質の道具と、足りない道具を一覧にします。"
+            "追跡しているファイルだけを読み、リポジトリは変えません。"
         )
     )
-    parser.add_argument("repository", nargs="?", default=".", help="path inside the repository")
+    parser.add_argument("repository", nargs="?", default=".", help="リポジトリの中のパス")
     parser.add_argument(
         "--language",
         action="append",
@@ -814,21 +895,21 @@ def main(argv: list[str] | None = None) -> int:
         choices=KNOWN_LANGUAGE_IDS,
         metavar="ID",
         help=(
-            "a language the project will use even if no file shows it yet "
-            "(repeatable); one of: " + ", ".join(KNOWN_LANGUAGE_IDS)
+            "まだファイルがなくても、プロジェクトで使う言語（くり返し指定できる）。次のどれか："
+            + ", ".join(KNOWN_LANGUAGE_IDS)
         ),
     )
     parser.add_argument(
         "--format",
         choices=("aspects", "result"),
         default="aspects",
-        help="output shape: aspects (default) or the common shipkeep result format",
+        help="出力の形。aspects（既定）か、shipkeep の共通の結果の形式の result",
     )
     args = parser.parse_args(argv)
     try:
         result = inventory(Path(args.repository), tuple(args.language))
     except InventoryError as error:
-        print(f"error: {error}", file=sys.stderr)
+        print(f"エラー：{error}", file=sys.stderr)
         return 2
     if args.format == "result":
         result = to_result(result, head_commit(Path(args.repository)))
