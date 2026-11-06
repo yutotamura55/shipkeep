@@ -43,6 +43,9 @@ MAX_EVIDENCE_LINES = 20
 MAX_TITLE_LENGTH = 120
 FULLWIDTH_AT = "\uff20"
 FULLWIDTH_NUMBER_SIGN = "\uff03"
+ISSUE_REFERENCE = re.compile(r"#(?=\d)")
+# 題名を縮めるときも、要約はこの文字数より短くしない。
+MIN_TITLE_SUMMARY = 20
 REPOSITORY = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 LABEL = re.compile(r"^[^,\r\n]{1,50}$")
 # Issue の本文に埋める目印。ID には空白や記号が入りうるので、パーセントエンコードする。
@@ -339,11 +342,22 @@ def title_for(item: dict[str, Any]) -> str:
     # 要約を先に置き、何の Issue かを一覧で読めるようにする。道具の名前は本文に書く。
     # タイトルではコードスパンが使えない。@ と # を全角 (U+FF20、U+FF03) にし、メンションや
     # Issue への参照として読まれないようにする。
-    text = " ".join(f"[shipkeep] {item['summary']}（{item['id']}）".split())
-    text = text.replace("@", FULLWIDTH_AT).replace("#", FULLWIDTH_NUMBER_SIGN)
+    # 長いときは要約を縮め、項目を見分ける ID を残す。ID だけで長すぎるときは全体を縮める。
+    prefix = "[shipkeep] "
+    suffix = neutralize_title(f"（{' '.join(str(item['id']).split())}）")
+    summary = neutralize_title(" ".join(str(item["summary"]).split()))
+    room = MAX_TITLE_LENGTH - len(prefix) - len(suffix)
+    if len(summary) > room >= MIN_TITLE_SUMMARY:
+        summary = summary[: room - 1] + "…"
+    text = prefix + summary + suffix
     if len(text) > MAX_TITLE_LENGTH:
         text = text[: MAX_TITLE_LENGTH - 1] + "…"
     return text
+
+
+def neutralize_title(text: str) -> str:
+    """@ と、数字の前の # を全角にする。GitHub が # を Issue への参照と読むのは数字が続くとき。"""
+    return ISSUE_REFERENCE.sub(FULLWIDTH_NUMBER_SIGN, text.replace("@", FULLWIDTH_AT))
 
 
 def evidence_line(evidence: dict[str, Any]) -> str:
@@ -521,12 +535,32 @@ def print_plan(plan: dict[str, Any]) -> None:
     for label in plan["labels_to_create"]:
         print(f"  作るラベル：{label}")
     for entry in plan["skipped"]:
-        issue = f"（#{entry['issue']}）" if "issue" in entry else ""
+        issue = f"、#{entry['issue']}" if "issue" in entry else ""
         if "tool" in entry:
             name = f"{entry['tool']} {entry['id']}"
         else:
             name = f"結果 {entry['result']} の項目 {entry['item']}"
-        print(f"  作らない：{name}：{entry['reason']}{issue}")
+        print(f"  作らない：{name}：{reason_text(entry['reason'])}（{entry['reason']}{issue}）")
+
+
+# 作らない理由の説明。案のファイルには、プログラムが読む理由の名前を書く。
+REASON_TEXTS = {
+    "dismissed": "対応しない項目として記録済み",
+    "already_open": "開いている Issue がある",
+    "closed_as_not_planned": "not planned として閉じた Issue がある",
+    "closed_as_duplicate": "duplicate として閉じた Issue がある",
+    "closed_without_reason": "理由を付けずに閉じた Issue がある",
+    "blocked_personal_data": "個人情報に見える文字列があるため止めた",
+    "over_limit": "1 回に作る数の上限を超えた",
+}
+
+
+def reason_text(reason: str) -> str:
+    if reason in REASON_TEXTS:
+        return REASON_TEXTS[reason]
+    if reason.startswith("closed_as_"):
+        return f"{reason.removeprefix('closed_as_')} として閉じた Issue がある"
+    return reason
 
 
 # --- create ---------------------------------------------------------------------------------
@@ -589,7 +623,8 @@ def parse_plan(data: bytes) -> dict[str, Any]:
         body = body_for(key, entry["item"], entry.get("commit"), entry.get("previous"))
         if entry["body"] != body or entry["title"] != title_for(entry["item"]):
             raise ReportError(
-                f"案のファイルの項目 {number} は、plan コマンドが作ったものではありません"
+                f"案のファイルの項目 {number} が、今の plan コマンドで作る内容と違います。"
+                "plan からやり直してください"
             )
     return dict(plan)
 
@@ -887,7 +922,6 @@ def use_utf8_output() -> None:
 
 
 def main(argv: list[str] | None = None, gh: GhRunner = run_gh) -> int:
-    use_utf8_output()
     args = build_parser().parse_args(argv)
     try:
         if args.command == "validate":
@@ -940,4 +974,6 @@ def main(argv: list[str] | None = None, gh: GhRunner = run_gh) -> int:
 
 
 if __name__ == "__main__":
+    # 取り込んだ側の出力の設定を変えないよう、スクリプトとして実行したときだけ切り替える。
+    use_utf8_output()
     raise SystemExit(main())

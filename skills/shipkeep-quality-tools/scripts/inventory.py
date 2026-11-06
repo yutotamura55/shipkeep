@@ -643,7 +643,8 @@ def summary_for(row: Row, scope_name: str) -> str:
     subject = join_words(scope_name, "の", ASPECT_NAMES[row["aspect"]])
     status = row["status"]
     if status == "pass":
-        return join_words(subject, "の道具がある") + f"（{', '.join(row['tools'])}）"
+        tools = f"（{', '.join(row['tools'])}）" if row["tools"] else ""
+        return join_words(subject, "の道具がある") + tools
     if status == "fail":
         return join_words(subject, "の道具が見つからない")
     if status == "unknown":
@@ -880,7 +881,6 @@ def use_utf8_output() -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
-    use_utf8_output()
     parser = QuietArgumentParser(
         description=(
             "リポジトリにすでにある品質の道具と、足りない道具を一覧にします。"
@@ -918,4 +918,6 @@ def main(argv: list[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
+    # 取り込んだ側の出力の設定を変えないよう、スクリプトとして実行したときだけ切り替える。
+    use_utf8_output()
     raise SystemExit(main())

@@ -264,7 +264,6 @@ def use_utf8_output() -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
-    use_utf8_output()
     parser = QuietArgumentParser(
         description=(
             "よく変更され、大きいソースファイル（ホットスポット）を、リファクタリングの候補として"
@@ -295,4 +294,6 @@ def main(argv: list[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
+    # 取り込んだ側の出力の設定を変えないよう、スクリプトとして実行したときだけ切り替える。
+    use_utf8_output()
     raise SystemExit(main())

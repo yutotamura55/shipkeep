@@ -1390,7 +1390,6 @@ def use_utf8_output() -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
-    use_utf8_output()
     parser = QuietArgumentParser(
         description="Git のリポジトリに、公開する前に直すべき問題がないかを点検します。"
     )
@@ -1446,4 +1445,6 @@ def main(argv: list[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
+    # 取り込んだ側の出力の設定を変えないよう、スクリプトとして実行したときだけ切り替える。
+    use_utf8_output()
     raise SystemExit(main())
