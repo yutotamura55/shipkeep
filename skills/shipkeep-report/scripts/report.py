@@ -5,7 +5,7 @@
   plan      結果から、作る Issue の案をファイルに書く。GitHub は読むだけで、何も作らない。
   create    承認された案のファイルどおりに、ラベルと Issue を作る。
   record    結果を、対象リポジトリの .shipkeep/history/ に写す。
-  dismiss   対応しないと決めた項目を、.shipkeep/dismissed.json に書く。
+  dismiss   見送ると決めた項目を、.shipkeep/dismissed.json に書く。
   recurring .shipkeep/history/ の記録から、何度も失敗した項目を挙げる。
 
 GitHub への書き込みは create だけが行い、案のファイルにない Issue は作らない。エージェントが
@@ -190,7 +190,7 @@ def load_dismissed(path: Path | None) -> dict[Key, dict[str, Any]]:
     """dismissed.json を読み、(tool, id) から項目への辞書を返す。ファイルがなければ空。"""
     if path is None or not path.exists():
         return {}
-    document = read_json(path, "対応しない項目のファイル")
+    document = read_json(path, "見送る項目のファイル")
     if not (
         isinstance(document, dict)
         and document.get("format") == DISMISSED_FORMAT
@@ -203,7 +203,7 @@ def load_dismissed(path: Path | None) -> dict[Key, dict[str, Any]]:
             for item in document["items"]
         )
     ):
-        raise ReportError(f"対応しない項目のファイルが {DISMISSED_FORMAT} の形式ではありません")
+        raise ReportError(f"見送る項目のファイルが {DISMISSED_FORMAT} の形式ではありません")
     return {(item["tool"], item["id"]): item for item in document["items"]}
 
 
@@ -417,7 +417,7 @@ def body_for(key: Key, item: dict[str, Any], commit: str | None, previous: int |
         "",
         "---",
         "秘密情報や個人情報にあたりうる値は伏せてあります。"
-        "この項目に対応しない場合は、Issue を not planned として閉じ、"
+        "この項目を見送る場合は、Issue を not planned として閉じ、"
         "`.shipkeep/dismissed.json` に記録してください。記録すると、後の点検でこの項目の Issue は"
         "作られません。",
     ]
@@ -545,7 +545,7 @@ def print_plan(plan: dict[str, Any]) -> None:
 
 # 作らない理由の説明。案のファイルには、プログラムが読む理由の名前を書く。
 REASON_TEXTS = {
-    "dismissed": "対応しない項目として記録済み",
+    "dismissed": "見送る項目として記録済み",
     "already_open": "開いている Issue がある",
     "closed_as_not_planned": "not planned として閉じた Issue がある",
     "closed_as_duplicate": "duplicate として閉じた Issue がある",
@@ -742,7 +742,7 @@ def record(result_path: Path, history: Path) -> str:
 def dismiss(path: Path, tool: str, item_id: str, reason: str, issue: int | None) -> None:
     """dismissed.json に項目を書く。同じ (tool, id) があれば置き換える。"""
     if not reason.strip():
-        raise ReportError("対応しない理由を書いてください")
+        raise ReportError("見送る理由を書いてください")
     if looks_personal(" ".join((tool, item_id, reason))):
         raise ReportError("個人情報に見える文字列があります。値を書かずに書き直してください")
     items = list(load_dismissed(path).values())
@@ -761,8 +761,8 @@ def dismiss(path: Path, tool: str, item_id: str, reason: str, issue: int | None)
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
     except OSError as error:
-        raise ReportError("対応しない項目のファイルに書き込めません") from error
-    write_json(path, document, "対応しない項目のファイル")
+        raise ReportError("見送る項目のファイルに書き込めません") from error
+    write_json(path, document, "見送る項目のファイル")
 
 
 def recurring(history: Path, minimum: int) -> dict[str, Any]:
@@ -863,7 +863,7 @@ def build_parser() -> QuietArgumentParser:
     parser = QuietArgumentParser(
         description=(
             "shipkeep の結果から GitHub の Issue の案を作り、承認された案の Issue を作ります。"
-            "点検の履歴と、対応しない項目を .shipkeep/ に残します。"
+            "点検の履歴と、見送る項目を .shipkeep/ に残します。"
         )
     )
     commands = parser.add_subparsers(dest="command", required=True)
@@ -913,13 +913,13 @@ def build_parser() -> QuietArgumentParser:
     record_parser.add_argument("result", type=Path, help="記録する結果のファイル")
     record_parser.add_argument("--into", required=True, type=Path, help="履歴のディレクトリ")
 
-    dismiss_parser = commands.add_parser("dismiss", help="対応しない項目を記録する")
+    dismiss_parser = commands.add_parser("dismiss", help="見送る項目を記録する")
     dismiss_parser.add_argument(
         "--file", required=True, type=Path, help="dismissed.json のファイル"
     )
     dismiss_parser.add_argument("--tool", required=True, help="項目を出した道具の名前")
     dismiss_parser.add_argument("--id", required=True, dest="item_id", help="項目の ID")
-    dismiss_parser.add_argument("--reason", required=True, help="対応しない理由")
+    dismiss_parser.add_argument("--reason", required=True, help="見送る理由")
     dismiss_parser.add_argument("--issue", type=int, help="判断を記録した Issue の番号")
 
     recurring_parser = commands.add_parser("recurring", help="何度も失敗した項目を挙げる")
@@ -984,7 +984,7 @@ def main(argv: list[str] | None = None, gh: GhRunner = run_gh) -> int:
             return 0
         if args.command == "dismiss":
             dismiss(args.file, args.tool, args.item_id, args.reason, args.issue)
-            print(f"対応しない項目として記録しました：{args.tool} {args.item_id}")
+            print(f"見送る項目として記録しました：{args.tool} {args.item_id}")
             return 0
         if args.min_count < 1:
             raise ReportError("--min-count は 1 以上にしてください")
